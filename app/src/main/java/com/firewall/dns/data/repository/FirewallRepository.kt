@@ -22,6 +22,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 object FirewallRepository {
 
@@ -56,7 +57,8 @@ object FirewallRepository {
     private val customBlockSet = ConcurrentHashMap.newKeySet<String>()
     private val customAllowSet = ConcurrentHashMap.newKeySet<String>()
 
-    private var logCounter = 0L
+    // AtomicLong evita IDs duplicados cuando 12 hilos registran anuncios al mismo tiempo
+    private val logCounter = AtomicLong(0L)
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
     @Volatile
@@ -169,9 +171,10 @@ object FirewallRepository {
     }
 
     fun addLog(domain: String, qType: String, isBlocked: Boolean, reason: String, appName: String) {
+        val timestamp = synchronized(timeFormat) { timeFormat.format(Date()) }
         val entry = DnsLogEntry(
-            id = ++logCounter,
-            timestamp = timeFormat.format(Date()),
+            id = logCounter.incrementAndGet(),
+            timestamp = timestamp,
             domain = domain,
             queryType = qType,
             isBlocked = isBlocked,
