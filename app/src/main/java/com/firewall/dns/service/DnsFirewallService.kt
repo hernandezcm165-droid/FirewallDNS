@@ -185,11 +185,16 @@ class DnsFirewallService : VpnService() {
             } catch (_: PackageManager.NameNotFoundException) {}
         }
 
-        vpnInterface = builder.establish() ?: return
+        val established = builder.establish()
+        if (established == null) {
+            stopVpn()
+            return
+        }
+        vpnInterface = established
         isRunning = true
         FirewallRepository.setRunning(true)
 
-        val fd = vpnInterface!!.fileDescriptor
+        val fd = established.fileDescriptor
         val input = FileInputStream(fd)
         val output = FileOutputStream(fd)
 
@@ -201,7 +206,13 @@ class DnsFirewallService : VpnService() {
                     if (length < 0) break
                     if (length > 0) {
                         val copy = buffer.copyOf(length)
-                        executor.execute { handlePacket(copy, output) }
+                        executor.execute {
+                            try {
+                                handlePacket(copy, output)
+                            } catch (_: Throwable) {
+                                // Evita que un paquete corrupto tumbe el hilo
+                            }
+                        }
                     }
                 }
             } catch (_: IOException) {}
@@ -223,6 +234,7 @@ class DnsFirewallService : VpnService() {
                 if (req.size < 20) return
                 isIpv6 = false
                 ipHeaderLen = (req[0].toInt() and 0x0F) * 4
+                if (ipHeaderLen < 20 || req.size < ipHeaderLen) return
                 protocol = req[9].toInt() and 0xFF
                 srcIp = req.copyOfRange(12, 16)
                 dstIp = req.copyOfRange(16, 20)
@@ -346,7 +358,7 @@ class DnsFirewallService : VpnService() {
             val buf = ByteArray(4096)
             val resp = DatagramPacket(buf, buf.size)
             socket.receive(resp)
-            buf.copyOf(resp.length)
+            if (resp.length >= 12) buf.copyOf(resp.length) else null
         } catch (_: Exception) {
             null
         } finally {
