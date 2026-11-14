@@ -14,10 +14,6 @@ class BlocklistDataSource(context: Context) {
 
     companion object {
         private const val HOSTS_FILE_NAME = "blocklist.txt"
-        private const val PRIMARY_URL =
-            "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/light-onlydomains.txt"
-        private const val FALLBACK_URL =
-            "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
     }
 
     fun loadFromDisk(defaultDomains: List<String>): Set<String> {
@@ -33,46 +29,56 @@ class BlocklistDataSource(context: Context) {
         return result
     }
 
-    suspend fun downloadAndSave(
+    suspend fun downloadMultipleAndSave(
         defaultDomains: List<String>,
-        urlString: String = PRIMARY_URL
-    ): Result<Set<String>> = withContext(Dispatchers.IO) {
-        val urlsToTry = listOf(urlString, FALLBACK_URL)
+        urls: List<String>
+    ): Result<Pair<Set<String>, String>> = withContext(Dispatchers.IO) {
+        if (urls.isEmpty()) {
+            return@withContext Result.failure(Exception("Agrega al menos una URL raw"))
+        }
+
+        val mergedSet = HashSet<String>(defaultDomains)
+        var successCount = 0
         var lastError: Exception? = null
 
-        for (targetUrl in urlsToTry) {
+        for (targetUrl in urls) {
             var conn: HttpURLConnection? = null
             try {
                 conn = (URL(targetUrl).openConnection() as HttpURLConnection).apply {
                     connectTimeout = 10000
-                    readTimeout = 20000
+                    readTimeout = 25000
                     setRequestProperty("User-Agent", "FirewallDNS/1.0")
                 }
                 if (conn.responseCode != 200) {
-                    lastError = Exception("HTTP ${conn.responseCode}")
+                    lastError = Exception("HTTP ${conn.responseCode} en $targetUrl")
                     continue
                 }
-
-                val tempSet = HashSet<String>(defaultDomains)
-                val outFile = File(filesDir, HOSTS_FILE_NAME)
                 conn.inputStream.bufferedReader().use { reader ->
-                    outFile.bufferedWriter().use { writer ->
-                        reader.forEachLine { line ->
-                            RuleEvaluator.parseHostLine(line)?.let { parsed ->
-                                tempSet.add(parsed)
-                                writer.write(parsed)
-                                writer.newLine()
-                            }
-                        }
+                    reader.forEachLine { line ->
+                        RuleEvaluator.parseHostLine(line)?.let { mergedSet.add(it) }
                     }
                 }
-                return@withContext Result.success(tempSet)
+                successCount++
             } catch (e: Exception) {
                 lastError = e
             } finally {
                 conn?.disconnect()
             }
         }
-        Result.failure(lastError ?: Exception("No se pudo descargar la lista"))
+
+        if (successCount == 0) {
+            return@withContext Result.failure(lastError ?: Exception("No se pudo descargar ninguna lista"))
+        }
+
+        val outFile = File(filesDir, HOSTS_FILE_NAME)
+        outFile.bufferedWriter().use { writer ->
+            mergedSet.forEach { domain ->
+                writer.write(domain)
+                writer.newLine()
+            }
+        }
+
+        val summary = "Listas OK ($successCount/${urls.size}): ${mergedSet.size} dominios"
+        Result.success(mergedSet to summary)
     }
 }
