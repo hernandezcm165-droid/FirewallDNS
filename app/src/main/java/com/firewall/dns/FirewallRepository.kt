@@ -152,40 +152,54 @@ object FirewallRepository {
 
     suspend fun downloadBlocklist(
         context: Context,
-        urlString: String = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/domains/light.txt"
+        urlString: String = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/light-onlydomains.txt"
     ): Result<Int> = withContext(Dispatchers.IO) {
-        try {
-            val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 10000
-                readTimeout = 20000
-            }
-            if (conn.responseCode != 200) {
-                return@withContext Result.failure(Exception("HTTP ${conn.responseCode}"))
-            }
+        val urlsToTry = listOf(
+            urlString,
+            "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+        )
+        var lastError: Exception? = null
 
-            val tempSet = HashSet<String>()
-            val outFile = File(context.filesDir, HOSTS_FILE_NAME)
-            conn.inputStream.bufferedReader().use { reader ->
-                outFile.bufferedWriter().use { writer ->
-                    reader.forEachLine { line ->
-                        parseHostLine(line)?.let { parsed ->
-                            tempSet.add(parsed)
-                            writer.write(parsed)
-                            writer.newLine()
+        for (targetUrl in urlsToTry) {
+            var conn: HttpURLConnection? = null
+            try {
+                conn = (URL(targetUrl).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 10000
+                    readTimeout = 20000
+                    setRequestProperty("User-Agent", "FirewallDNS/1.0")
+                }
+                if (conn.responseCode != 200) {
+                    lastError = Exception("HTTP ${conn.responseCode}")
+                    continue
+                }
+
+                val tempSet = HashSet<String>()
+                val outFile = File(context.filesDir, HOSTS_FILE_NAME)
+                conn.inputStream.bufferedReader().use { reader ->
+                    outFile.bufferedWriter().use { writer ->
+                        reader.forEachLine { line ->
+                            parseHostLine(line)?.let { parsed ->
+                                tempSet.add(parsed)
+                                writer.write(parsed)
+                                writer.newLine()
+                            }
                         }
                     }
                 }
-            }
 
-            hostBlockSet.clear()
-            hostBlockSet.addAll(defaultDomains)
-            hostBlockSet.addAll(tempSet)
-            updateRulesCount()
-            _cacheInvalidateEvent.tryEmit(Unit)
-            Result.success(hostBlockSet.size)
-        } catch (e: Exception) {
-            Result.failure(e)
+                hostBlockSet.clear()
+                hostBlockSet.addAll(defaultDomains)
+                hostBlockSet.addAll(tempSet)
+                updateRulesCount()
+                _cacheInvalidateEvent.tryEmit(Unit)
+                return@withContext Result.success(hostBlockSet.size)
+            } catch (e: Exception) {
+                lastError = e
+            } finally {
+                conn?.disconnect()
+            }
         }
+        Result.failure(lastError ?: Exception("No se pudo descargar la lista"))
     }
 
     private fun parseHostLine(raw: String): String? {
@@ -196,7 +210,7 @@ object FirewallRepository {
             parts.size >= 2 && (parts[0] == "0.0.0.0" || parts[0] == "127.0.0.1") -> parts[1]
             parts.size == 1 -> parts[0]
             else -> return null
-        }
+        }.removePrefix("*.")
         return if (candidate.contains('.') && candidate != "localhost") candidate else null
     }
 
