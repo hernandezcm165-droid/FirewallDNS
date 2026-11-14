@@ -3,6 +3,8 @@ package com.firewall.dns
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -11,11 +13,14 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.viewModels
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.ViewModelProvider
 import com.firewall.dns.service.DnsFirewallService
 import com.firewall.dns.ui.screens.AppsSettingsScreen
 import com.firewall.dns.ui.screens.LogsScreen
@@ -33,7 +39,7 @@ import com.firewall.dns.ui.viewmodel.FirewallViewModel
 
 class MainActivity : ComponentActivity() {
 
-    private val firewallViewModel: FirewallViewModel by viewModels()
+    private lateinit var firewallViewModel: FirewallViewModel
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -48,24 +54,105 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val crashPrefs = getSharedPreferences("crash_debug", MODE_PRIVATE)
+        val savedCrash = crashPrefs.getString("last_crash", null)
+
+        val prevHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            crashPrefs.edit().putString("last_crash", throwable.stackTraceToString()).commit()
+            prevHandler?.uncaughtException(thread, throwable)
+        }
+
         super.onCreate(savedInstanceState)
 
-        if (firewallViewModel.shouldAutoStartVpn() && VpnService.prepare(this) == null) {
-            startFirewallService()
+        if (!savedCrash.isNullOrBlank()) {
+            showCrashScreen(savedCrash, crashPrefs)
+            return
         }
 
-        setContent {
-            MaterialTheme {
-                FirewallApp(
-                    viewModel = firewallViewModel,
-                    onToggleVpn = { enable ->
-                        if (enable) checkPermissionsAndStart() else stopFirewallService()
-                    },
-                    onOpenBatteryOpt = { requestIgnoreBatteryOptimization() },
-                    onOpenVpnSettings = { startActivity(Intent(Settings.ACTION_VPN_SETTINGS)) }
-                )
+        try {
+            firewallViewModel = ViewModelProvider(
+                this,
+                ViewModelProvider.AndroidViewModelFactory.getInstance(application)
+            )[FirewallViewModel::class.java]
+
+            if (firewallViewModel.shouldAutoStartVpn() && VpnService.prepare(this) == null) {
+                startFirewallService()
+            }
+
+            setContent {
+                MaterialTheme {
+                    FirewallApp(
+                        viewModel = firewallViewModel,
+                        onToggleVpn = { enable ->
+                            if (enable) checkPermissionsAndStart() else stopFirewallService()
+                        },
+                        onOpenBatteryOpt = { requestIgnoreBatteryOptimization() },
+                        onOpenVpnSettings = { startActivity(Intent(Settings.ACTION_VPN_SETTINGS)) }
+                    )
+                }
+            }
+        } catch (t: Throwable) {
+            val trace = t.stackTraceToString()
+            crashPrefs.edit().putString("last_crash", trace).commit()
+            showCrashScreen(trace, crashPrefs)
+        }
+    }
+
+    private fun showCrashScreen(trace: String, crashPrefs: android.content.SharedPreferences) {
+        val density = resources.displayMetrics.density
+        val pad = (16 * density).toInt()
+        val topPad = (56 * density).toInt()
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, topPad, pad, pad)
+            setBackgroundColor(android.graphics.Color.WHITE)
+        }
+
+        val title = TextView(this).apply {
+            text = "Error detectado al iniciar:"
+            textSize = 18f
+            setTextColor(android.graphics.Color.RED)
+        }
+
+        val btnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, pad / 2, 0, pad / 2)
+        }
+
+        val copyBtn = Button(this).apply {
+            text = "Copiar error"
+            setOnClickListener {
+                val cb = getSystemService(ClipboardManager::class.java)
+                cb.setPrimaryClip(ClipData.newPlainText("Crash", trace))
+                Toast.makeText(this@MainActivity, "Error copiado", Toast.LENGTH_SHORT).show()
             }
         }
+
+        val retryBtn = Button(this).apply {
+            text = "Limpiar y reintentar"
+            setOnClickListener {
+                crashPrefs.edit().remove("last_crash").commit()
+                recreate()
+            }
+        }
+
+        btnRow.addView(copyBtn)
+        btnRow.addView(retryBtn)
+
+        val scroll = ScrollView(this)
+        val body = TextView(this).apply {
+            text = trace
+            textSize = 12f
+            setTextColor(android.graphics.Color.BLACK)
+        }
+        scroll.addView(body)
+
+        layout.addView(title)
+        layout.addView(btnRow)
+        layout.addView(scroll)
+        setContentView(layout)
     }
 
     private fun checkPermissionsAndStart() {
