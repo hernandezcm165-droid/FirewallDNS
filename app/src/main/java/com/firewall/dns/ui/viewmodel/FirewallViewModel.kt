@@ -24,6 +24,8 @@ class FirewallViewModel(application: Application) : AndroidViewModel(application
     val customBlockList: StateFlow<List<String>> = FirewallRepository.customBlockList
     val customAllowList: StateFlow<List<String>> = FirewallRepository.customAllowList
     val excludedPackages: StateFlow<Set<String>> = FirewallRepository.excludedPackages
+    val blocklistUrls: StateFlow<List<String>> = FirewallRepository.blocklistUrls
+    val smartModeEnabled: StateFlow<Boolean> = FirewallRepository.smartModeEnabled
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
@@ -114,14 +116,30 @@ class FirewallViewModel(application: Application) : AndroidViewModel(application
         FirewallRepository.toggleExcludedApp(packageName)
     }
 
+    fun toggleSmartMode(enabled: Boolean) {
+        FirewallRepository.setSmartModeEnabled(enabled)
+    }
+
+    fun addBlocklistUrl(url: String) {
+        if (FirewallRepository.addBlocklistUrl(url)) {
+            _toastMessage.tryEmit("URL agregada. Pulsa Actualizar listas")
+        } else {
+            _toastMessage.tryEmit("Debe empezar con http:// o https://")
+        }
+    }
+
+    fun removeBlocklistUrl(url: String) {
+        FirewallRepository.removeBlocklistUrl(url)
+    }
+
     fun downloadBlocklist() {
         if (_isDownloading.value) return
         viewModelScope.launch {
             _isDownloading.value = true
             val result = FirewallRepository.downloadBlocklist()
             _isDownloading.value = false
-            result.onSuccess { count ->
-                _toastMessage.tryEmit("Lista actualizada: $count dominios")
+            result.onSuccess { summary ->
+                _toastMessage.tryEmit(summary)
             }.onFailure { err ->
                 _toastMessage.tryEmit("Error: ${err.message}")
             }
