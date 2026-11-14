@@ -4,7 +4,6 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
-import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.net.VpnService
@@ -16,28 +15,25 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import com.firewall.dns.service.DnsFirewallService
+import com.firewall.dns.ui.screens.AppsSettingsScreen
+import com.firewall.dns.ui.screens.LogsScreen
+import com.firewall.dns.ui.screens.RulesScreen
+import com.firewall.dns.ui.viewmodel.FirewallViewModel
 
 class MainActivity : ComponentActivity() {
+
+    private val firewallViewModel: FirewallViewModel by viewModels()
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -53,15 +49,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        FirewallRepository.init(applicationContext)
 
-        if (FirewallRepository.getShouldRun(this) && !FirewallRepository.stats.value.isRunning) {
-            if (VpnService.prepare(this) == null) startFirewallService()
+        if (firewallViewModel.shouldAutoStartVpn() && VpnService.prepare(this) == null) {
+            startFirewallService()
         }
 
         setContent {
             MaterialTheme {
                 FirewallApp(
+                    viewModel = firewallViewModel,
                     onToggleVpn = { enable ->
                         if (enable) checkPermissionsAndStart() else stopFirewallService()
                     },
@@ -118,13 +114,31 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FirewallApp(
+    viewModel: FirewallViewModel,
     onToggleVpn: (Boolean) -> Unit,
     onOpenBatteryOpt: () -> Unit,
     onOpenVpnSettings: () -> Unit
 ) {
-    val stats by FirewallRepository.stats.collectAsState()
+    val context = LocalContext.current
+    val stats by viewModel.stats.collectAsState()
+    val logs by viewModel.filteredLogs.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsState()
+    val onlyBlocked by viewModel.onlyBlocked.collectAsState()
+    val customBlock by viewModel.customBlockList.collectAsState()
+    val customAllow by viewModel.customAllowList.collectAsState()
+    val isDownloading by viewModel.isDownloading.collectAsState()
+    val apps by viewModel.filteredApps.collectAsState()
+    val excludedPackages by viewModel.excludedPackages.collectAsState()
+    val appSearch by viewModel.appSearch.collectAsState()
+
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Registro", "Reglas", "Apps / Ajustes")
+
+    LaunchedEffect(Unit) {
+        viewModel.toastMessage.collect { msg ->
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -162,299 +176,39 @@ fun FirewallApp(
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when (selectedTab) {
-                0 -> LogsTab(stats)
-                1 -> RulesTab(stats)
-                2 -> AppsAndSettingsTab(stats, onOpenBatteryOpt, onOpenVpnSettings)
-            }
-        }
-    }
-}
-
-@Composable
-fun LogsTab(stats: FirewallStats) {
-    val context = LocalContext.current
-    val logs by FirewallRepository.logs.collectAsState()
-    var onlyBlocked by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
-
-    val filtered = remember(logs, onlyBlocked, searchQuery) {
-        logs.filter {
-            (!onlyBlocked || it.isBlocked) &&
-                (searchQuery.isBlank() || it.domain.contains(searchQuery, ignoreCase = true))
-        }
-    }
-
-    Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatCard("Bloqueados", stats.totalBlocked.toString(), Color(0xFFD32F2F), Modifier.weight(1f))
-            StatCard("Permitidos", stats.totalAllowed.toString(), Color(0xFF388E3C), Modifier.weight(1f))
-            StatCard("Reglas", stats.loadedRulesCount.toString(), Color(0xFF1976D2), Modifier.weight(1f))
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholder = { Text("Buscar dominio...") },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                singleLine = true,
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(6.dp))
-            FilterChip(
-                selected = onlyBlocked,
-                onClick = { onlyBlocked = !onlyBlocked },
-                label = { Text("Bloq.") }
-            )
-            IconButton(onClick = { FirewallRepository.clearLogs() }) {
-                Icon(Icons.Default.Delete, contentDescription = "Limpiar")
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        if (filtered.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    text = if (stats.isRunning) "Esperando consultas DNS..." else "Enciende el interruptor arriba para empezar",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                0 -> LogsScreen(
+                    stats = stats,
+                    logs = logs,
+                    searchQuery = searchQuery,
+                    onlyBlocked = onlyBlocked,
+                    onSearchQueryChange = viewModel::onSearchQueryChange,
+                    onToggleOnlyBlocked = viewModel::onToggleOnlyBlocked,
+                    onClearLogs = viewModel::clearLogs,
+                    onToggleRule = { entry ->
+                        viewModel.setCustomRule(entry.domain, block = !entry.isBlocked)
+                    }
+                )
+                1 -> RulesScreen(
+                    stats = stats,
+                    customBlock = customBlock,
+                    customAllow = customAllow,
+                    isDownloading = isDownloading,
+                    onDownloadBlocklist = viewModel::downloadBlocklist,
+                    onAddCustomRule = viewModel::setCustomRule,
+                    onRemoveCustomRule = viewModel::removeCustomRule
+                )
+                2 -> AppsSettingsScreen(
+                    stats = stats,
+                    apps = apps,
+                    excludedPackages = excludedPackages,
+                    appSearch = appSearch,
+                    onAppSearchChange = viewModel::onAppSearchChange,
+                    onSelectUpstreamDns = viewModel::setUpstreamDns,
+                    onToggleExcludedApp = viewModel::toggleExcludedApp,
+                    onOpenBatteryOpt = onOpenBatteryOpt,
+                    onOpenVpnSettings = onOpenVpnSettings
                 )
             }
-        } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(filtered, key = { it.id }) { entry ->
-                    val bg = if (entry.isBlocked) Color(0xFFFFEBEE) else Color(0xFFE8F5E9)
-                    val fg = if (entry.isBlocked) Color(0xFFC62828) else Color(0xFF2E7D32)
-                    Card(colors = CardDefaults.cardColors(containerColor = bg), modifier = Modifier.fillMaxWidth()) {
-                        Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(entry.domain, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(
-                                    "${entry.timestamp} • ${entry.queryType} • ${entry.reason} • ${entry.appName}",
-                                    fontSize = 11.sp, color = fg
-                                )
-                            }
-                            TextButton(onClick = {
-                                FirewallRepository.setCustomRule(context, entry.domain, block = !entry.isBlocked)
-                            }) {
-                                Text(if (entry.isBlocked) "Permitir" else "Bloquear")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun RulesTab(stats: FirewallStats) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val customBlock by FirewallRepository.customBlockList.collectAsState()
-    val customAllow by FirewallRepository.customAllowList.collectAsState()
-
-    var domainInput by remember { mutableStateOf("") }
-    var isDownloading by remember { mutableStateOf(false) }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Listas automáticas (${stats.loadedRulesCount} dominios)", fontWeight = FontWeight.Bold)
-                    Button(
-                        onClick = {
-                            isDownloading = true
-                            scope.launch {
-                                val res = FirewallRepository.downloadBlocklist(context)
-                                isDownloading = false
-                                res.onSuccess {
-                                    Toast.makeText(context, "Actualizada: $it dominios", Toast.LENGTH_SHORT).show()
-                                }.onFailure {
-                                    Toast.makeText(context, "Error: ${it.message}", Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        },
-                        enabled = !isDownloading,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(if (isDownloading) "Descargando lista..." else "Descargar / Actualizar HaGeZi Light")
-                    }
-                }
-            }
-        }
-
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Agregar regla manual", fontWeight = FontWeight.Bold)
-                    OutlinedTextField(
-                        value = domainInput,
-                        onValueChange = { domainInput = it },
-                        placeholder = { Text("ej. tracking.ejemplo.com") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = {
-                                FirewallRepository.setCustomRule(context, domainInput, block = true)
-                                domainInput = ""
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) { Text("Bloquear") }
-                        OutlinedButton(
-                            onClick = {
-                                FirewallRepository.setCustomRule(context, domainInput, block = false)
-                                domainInput = ""
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) { Text("Permitir") }
-                    }
-                }
-            }
-        }
-
-        if (customBlock.isNotEmpty()) {
-            item { Text("Lista Negra Propia (${customBlock.size})", fontWeight = FontWeight.Bold) }
-            items(customBlock) { domain ->
-                RuleRow(domain, isBlocked = true) { FirewallRepository.removeCustomRule(context, domain) }
-            }
-        }
-
-        if (customAllow.isNotEmpty()) {
-            item { Text("Lista Blanca Propia (${customAllow.size})", fontWeight = FontWeight.Bold) }
-            items(customAllow) { domain ->
-                RuleRow(domain, isBlocked = false) { FirewallRepository.removeCustomRule(context, domain) }
-            }
-        }
-    }
-}
-
-@Composable
-fun AppsAndSettingsTab(
-    stats: FirewallStats,
-    onOpenBatteryOpt: () -> Unit,
-    onOpenVpnSettings: () -> Unit
-) {
-    val context = LocalContext.current
-    val excluded by FirewallRepository.excludedPackages.collectAsState()
-    var appSearch by remember { mutableStateOf("") }
-    var installedApps by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-
-    LaunchedEffect(Unit) {
-        installedApps = withContext(Dispatchers.IO) {
-            val pm = context.packageManager
-            pm.getInstalledApplications(PackageManager.GET_META_DATA)
-                .filter { it.packageName != context.packageName && (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 }
-                .map { pm.getApplicationLabel(it).toString() to it.packageName }
-                .sortedBy { it.first.lowercase() }
-        }
-    }
-
-    val dnsOptions = listOf(
-        "9.9.9.9" to "Quad9 (Seguridad)",
-        "1.1.1.1" to "Cloudflare (Rápido)",
-        "8.8.8.8" to "Google DNS",
-        "94.140.14.14" to "AdGuard DNS"
-    )
-
-    val filteredApps = remember(installedApps, appSearch) {
-        installedApps.filter {
-            appSearch.isBlank() || it.first.contains(appSearch, true) || it.second.contains(appSearch, true)
-        }
-    }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("DNS Upstream (para tráfico permitido)", fontWeight = FontWeight.Bold)
-                    dnsOptions.forEach { (ip, label) ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(
-                                selected = stats.upstreamDns == ip,
-                                onClick = { FirewallRepository.setUpstreamDns(context, ip) }
-                            )
-                            Text("$label ($ip)", fontSize = 14.sp)
-                        }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = onOpenBatteryOpt, modifier = Modifier.weight(1f)) {
-                            Text("Batería sin restr.", fontSize = 12.sp)
-                        }
-                        OutlinedButton(onClick = onOpenVpnSettings, modifier = Modifier.weight(1f)) {
-                            Text("VPN siempre activa", fontSize = 12.sp)
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            Text("Excluir apps del filtro (Split Tunneling)", fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(4.dp))
-            OutlinedTextField(
-                value = appSearch,
-                onValueChange = { appSearch = it },
-                placeholder = { Text("Buscar app instalada...") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-
-        items(filteredApps, key = { it.second }) { (label, pkg) ->
-            val isExcluded = excluded.contains(pkg)
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(label, fontWeight = FontWeight.Medium)
-                        Text(pkg, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Switch(
-                        checked = isExcluded,
-                        onCheckedChange = { FirewallRepository.toggleExcludedApp(context, pkg) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun RuleRow(domain: String, isBlocked: Boolean, onDelete: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = if (isBlocked) "🚫 $domain" else "✅ $domain",
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Default.Delete, contentDescription = "Eliminar")
-            }
-        }
-    }
-}
-
-@Composable
-fun StatCard(label: String, value: String, color: Color, modifier: Modifier) {
-    Card(modifier = modifier) {
-        Column(modifier = Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(value, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = color)
-            Text(label, fontSize = 12.sp)
         }
     }
 }
