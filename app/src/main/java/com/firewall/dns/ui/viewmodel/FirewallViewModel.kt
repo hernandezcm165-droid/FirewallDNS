@@ -20,11 +20,6 @@ import kotlinx.coroutines.launch
 
 class FirewallViewModel(application: Application) : AndroidViewModel(application) {
 
-    init {
-        FirewallRepository.init(application)
-        loadInstalledApps()
-    }
-
     val stats: StateFlow<FirewallStats> = FirewallRepository.stats
     val customBlockList: StateFlow<List<String>> = FirewallRepository.customBlockList
     val customAllowList: StateFlow<List<String>> = FirewallRepository.customAllowList
@@ -69,9 +64,18 @@ class FirewallViewModel(application: Application) : AndroidViewModel(application
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    init {
+        FirewallRepository.init(application)
+        loadInstalledApps()
+    }
+
     private fun loadInstalledApps() {
         viewModelScope.launch {
-            _installedApps.value = FirewallRepository.getInstalledUserApps()
+            try {
+                _installedApps.value = FirewallRepository.getInstalledUserApps()
+            } catch (_: Exception) {
+                _installedApps.value = emptyList()
+            }
         }
     }
 
