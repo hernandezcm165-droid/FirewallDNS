@@ -109,18 +109,15 @@ class MainActivity : ComponentActivity() {
             setPadding(pad, topPad, pad, pad)
             setBackgroundColor(android.graphics.Color.WHITE)
         }
-
         val title = TextView(this).apply {
             text = "Error detectado al iniciar:"
             textSize = 18f
             setTextColor(android.graphics.Color.RED)
         }
-
         val btnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, pad / 2, 0, pad / 2)
         }
-
         val copyBtn = Button(this).apply {
             text = "Copiar error"
             setOnClickListener {
@@ -129,7 +126,6 @@ class MainActivity : ComponentActivity() {
                 Toast.makeText(this@MainActivity, "Error copiado", Toast.LENGTH_SHORT).show()
             }
         }
-
         val retryBtn = Button(this).apply {
             text = "Limpiar y reintentar"
             setOnClickListener {
@@ -137,7 +133,6 @@ class MainActivity : ComponentActivity() {
                 recreate()
             }
         }
-
         btnRow.addView(copyBtn)
         btnRow.addView(retryBtn)
 
@@ -148,7 +143,6 @@ class MainActivity : ComponentActivity() {
             setTextColor(android.graphics.Color.BLACK)
         }
         scroll.addView(body)
-
         layout.addView(title)
         layout.addView(btnRow)
         layout.addView(scroll)
@@ -213,6 +207,8 @@ fun FirewallApp(
     val onlyBlocked by viewModel.onlyBlocked.collectAsState()
     val customBlock by viewModel.customBlockList.collectAsState()
     val customAllow by viewModel.customAllowList.collectAsState()
+    val blocklistUrls by viewModel.blocklistUrls.collectAsState()
+    val smartModeEnabled by viewModel.smartModeEnabled.collectAsState()
     val isDownloading by viewModel.isDownloading.collectAsState()
     val apps by viewModel.filteredApps.collectAsState()
     val excludedPackages by viewModel.excludedPackages.collectAsState()
@@ -279,7 +275,12 @@ fun FirewallApp(
                     stats = stats,
                     customBlock = customBlock,
                     customAllow = customAllow,
+                    blocklistUrls = blocklistUrls,
+                    smartModeEnabled = smartModeEnabled,
                     isDownloading = isDownloading,
+                    onToggleSmartMode = viewModel::toggleSmartMode,
+                    onAddBlocklistUrl = viewModel::addBlocklistUrl,
+                    onRemoveBlocklistUrl = viewModel::removeBlocklistUrl,
                     onDownloadBlocklist = viewModel::downloadBlocklist,
                     onAddCustomRule = viewModel::setCustomRule,
                     onRemoveCustomRule = viewModel::removeCustomRule
