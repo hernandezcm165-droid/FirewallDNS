@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import com.firewall.dns.data.local.BlocklistDataSource
 import com.firewall.dns.data.local.PreferencesDataSource
 import com.firewall.dns.domain.engine.RuleEvaluator
+import com.firewall.dns.domain.engine.SmartDomainAnalyzer
 import com.firewall.dns.domain.model.AppInfoItem
 import com.firewall.dns.domain.model.DnsLogEntry
 import com.firewall.dns.domain.model.FirewallStats
@@ -47,6 +48,12 @@ object FirewallRepository {
     private val _excludedPackages = MutableStateFlow<Set<String>>(emptySet())
     val excludedPackages: StateFlow<Set<String>> = _excludedPackages.asStateFlow()
 
+    private val _blocklistUrls = MutableStateFlow<List<String>>(emptyList())
+    val blocklistUrls: StateFlow<List<String>> = _blocklistUrls.asStateFlow()
+
+    private val _smartModeEnabled = MutableStateFlow(true)
+    val smartModeEnabled: StateFlow<Boolean> = _smartModeEnabled.asStateFlow()
+
     private val _cacheInvalidateEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val cacheInvalidateEvent: SharedFlow<Unit> = _cacheInvalidateEvent.asSharedFlow()
 
@@ -56,8 +63,8 @@ object FirewallRepository {
     private val hostBlockSet = ConcurrentHashMap.newKeySet<String>()
     private val customBlockSet = ConcurrentHashMap.newKeySet<String>()
     private val customAllowSet = ConcurrentHashMap.newKeySet<String>()
+    private val learnedTokens = ConcurrentHashMap<String, Int>()
 
-    // AtomicLong evita IDs duplicados cuando 12 hilos registran anuncios al mismo tiempo
     private val logCounter = AtomicLong(0L)
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
@@ -86,6 +93,11 @@ object FirewallRepository {
             _customAllowList.value = customAllowSet.sorted()
 
             _excludedPackages.value = prefsDataSource.getExcludedPackages()
+            _blocklistUrls.value = prefsDataSource.getBlocklistUrls()
+            _smartModeEnabled.value = prefsDataSource.getSmartModeEnabled()
+            learnedTokens.clear()
+            learnedTokens.putAll(prefsDataSource.getLearnedTokens())
+
             _stats.update { it.copy(upstreamDns = prefsDataSource.getUpstreamDns()) }
 
             hostBlockSet.clear()
@@ -111,6 +123,30 @@ object FirewallRepository {
         _rebuildVpnEvent.tryEmit(Unit)
     }
 
+    fun setSmartModeEnabled(enabled: Boolean) {
+        _smartModeEnabled.value = enabled
+        prefsDataSource.saveSmartModeEnabled(enabled)
+        _cacheInvalidateEvent.tryEmit(Unit)
+    }
+
+    fun addBlocklistUrl(rawUrl: String): Boolean {
+        val clean = rawUrl.trim()
+        if (!clean.startsWith("http://") && !clean.startsWith("https://")) return false
+        val current = _blocklistUrls.value.toMutableList()
+        if (!current.contains(clean)) {
+            current.add(clean)
+            _blocklistUrls.value = current
+            prefsDataSource.saveBlocklistUrls(current)
+        }
+        return true
+    }
+
+    fun removeBlocklistUrl(url: String) {
+        val updated = _blocklistUrls.value.filter { it != url }
+        _blocklistUrls.value = updated
+        prefsDataSource.saveBlocklistUrls(updated)
+    }
+
     fun toggleExcludedApp(pkg: String) {
         val updated = _excludedPackages.value.toMutableSet()
         if (!updated.add(pkg)) updated.remove(pkg)
@@ -119,19 +155,28 @@ object FirewallRepository {
         _rebuildVpnEvent.tryEmit(Unit)
     }
 
-    suspend fun downloadBlocklist(): Result<Int> {
-        val result = blocklistDataSource.downloadAndSave(defaultDomains)
-        return result.map { newDomains ->
+    suspend fun downloadBlocklist(): Result<String> {
+        val urls = _blocklistUrls.value
+        val result = blocklistDataSource.downloadMultipleAndSave(defaultDomains, urls)
+        return result.map { (newDomains, summary) ->
             hostBlockSet.clear()
             hostBlockSet.addAll(newDomains)
             updateRulesCount()
             _cacheInvalidateEvent.tryEmit(Unit)
-            hostBlockSet.size
+            summary
         }
     }
 
-    fun evaluateDomain(domain: String): Pair<Boolean, String> =
-        RuleEvaluator.evaluate(domain, customAllowSet, customBlockSet, hostBlockSet)
+    fun evaluateDomain(domain: String): Pair<Boolean, String> {
+        val baseEval = RuleEvaluator.evaluate(domain, customAllowSet, customBlockSet, hostBlockSet)
+        if (baseEval.first || baseEval.second == "Lista blanca") {
+            return baseEval
+        }
+        if (_smartModeEnabled.value) {
+            SmartDomainAnalyzer.evaluate(domain, learnedTokens)?.let { return it }
+        }
+        return baseEval
+    }
 
     fun setCustomRule(domain: String, block: Boolean) {
         val clean = domain.trim().lowercase()
@@ -143,6 +188,8 @@ object FirewallRepository {
             customBlockSet.remove(clean)
             customAllowSet.add(clean)
         }
+        SmartDomainAnalyzer.updateLearning(clean, block, learnedTokens)
+        prefsDataSource.saveLearnedTokens(learnedTokens)
         saveCustomRules()
     }
 
