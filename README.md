@@ -1,20 +1,29 @@
 # FirewallDNS
 
-Firewall DNS local para Android, creado por **Candido y Elizabeth**.
+Firewall DNS local para Android, creado por Candido y Elizabeth.
 
-La aplicación usa el servicio Android `VpnService` para filtrar consultas DNS clásicas compatibles y permitir listas de bloqueo, reglas manuales, selección de DNS upstream y exclusiones por aplicación.
+Esta app usa un servicio `VpnService` para interceptar y filtrar consultas DNS compatibles, así como aplicar reglas personalizadas, listas externas y exclusiones por aplicación.
 
-## Alcance y límites importantes
+## Qué es exactamente
 
-- Es un **filtro DNS**, no un firewall de paquetes completo. No controla de forma general todas las conexiones TCP/UDP ni los puertos de cada aplicación.
-- DNS cifrado (DoH sobre HTTPS y DoT sobre TLS) no se inspecciona ni se puede bloquear de forma fiable solo por su dirección IP sin afectar otros servicios.
-- El manejador actual procesa consultas DNS por UDP y rechaza DNS sobre TCP; tampoco reensambla paquetes IP fragmentados ni procesa cabeceras de extensión IPv6.
-- La indicación de protección de la app se refiere al filtrado DNS, no a una garantía de que toda la conexión del dispositivo esté protegida.
+- Es un filtro DNS / firewall de dominios, no un firewall completo de todas las conexiones del sistema.
+- Bloquea consultas DNS tradicionales y permite personalizar dominios bloqueados o permitidos.
+- El tráfico cifrado como DoH/DoT no se inspecciona de forma fiable en este enfoque.
+- La protección se centra en la resolución de nombres y en la gestión de reglas de dominio.
 
-Para un firewall por aplicación completo hace falta diseñar y probar un motor VPN de reenvío de paquetes con control de conexiones y políticas explícitas de TCP/UDP. No se debe anunciar esa capacidad hasta implementar y validar ese motor en dispositivos reales.
+## Límite realista
 
-## Seguridad y robustez
+- No reemplaza un firewall de paquete completo ni bloquea todo el tráfico TCP/UDP del dispositivo.
+- La protección se entiende como seguridad DNS y filtrado de dominios.
+- Para un control total por aplicación y por puerto, se requeriría un diseño de VPN más avanzado y pruebas de red reales.
 
-- Cola de procesamiento acotada para limitar el uso de memoria durante ráfagas de paquetes.
-- Validación de longitud UDP y descarte explícito de paquetes fragmentados que este motor no puede reensamblar.
-- El servicio aclara que DoH/DoT no se inspecciona.
+## Créditos
+
+- Desarrollo y diseño: Candido y Elizabeth
+- Proyecto: FirewallDNS
+
+## Uso recomendado
+
+- Mantén activado solo el filtrado DNS necesario.
+- Usa listas externas con cuidado y valida reglas personalizadas.
+- Si quieres mayor protección, combina este filtro con políticas de red y controles del sistema.

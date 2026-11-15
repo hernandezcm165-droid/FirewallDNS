@@ -21,14 +21,13 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -37,7 +36,6 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
 import com.firewall.dns.service.DnsFirewallService
 import com.firewall.dns.ui.screens.AppsSettingsScreen
-import com.firewall.dns.ui.screens.DashboardScreen
 import com.firewall.dns.ui.screens.LogsScreen
 import com.firewall.dns.ui.screens.RulesScreen
 import com.firewall.dns.ui.theme.FirewallTheme
@@ -88,14 +86,16 @@ class MainActivity : ComponentActivity() {
 
             setContent {
                 FirewallTheme {
-                    FirewallApp(
-                        viewModel = firewallViewModel,
-                        onToggleVpn = { enable ->
-                            if (enable) checkPermissionsAndStart() else stopFirewallService()
-                        },
-                        onOpenBatteryOpt = { requestIgnoreBatteryOptimization() },
-                        onOpenVpnSettings = { startActivity(Intent(Settings.ACTION_VPN_SETTINGS)) }
-                    )
+                    Surface(color = MaterialTheme.colorScheme.background) {
+                        FirewallApp(
+                            viewModel = firewallViewModel,
+                            onToggleVpn = { enable ->
+                                if (enable) checkPermissionsAndStart() else stopFirewallService()
+                            },
+                            onOpenBatteryOpt = { requestIgnoreBatteryOptimization() },
+                            onOpenVpnSettings = { startActivity(Intent(Settings.ACTION_VPN_SETTINGS)) }
+                        )
+                    }
                 }
             }
         } catch (t: Throwable) {
@@ -198,61 +198,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable
-private fun FirewallIcon() {
-    val shieldColor = MaterialTheme.colorScheme.primary
-    val brickColor = MaterialTheme.colorScheme.onPrimary
-
-    Canvas(modifier = Modifier.size(40.dp)) {
-        val shield = Path().apply {
-            moveTo(size.width * 0.5f, size.height * 0.04f)
-            lineTo(size.width * 0.9f, size.height * 0.2f)
-            lineTo(size.width * 0.87f, size.height * 0.58f)
-            lineTo(size.width * 0.72f, size.height * 0.82f)
-            lineTo(size.width * 0.5f, size.height * 0.97f)
-            lineTo(size.width * 0.28f, size.height * 0.82f)
-            lineTo(size.width * 0.13f, size.height * 0.58f)
-            lineTo(size.width * 0.1f, size.height * 0.2f)
-            close()
-        }
-
-        drawPath(path = shield, color = shieldColor)
-        clipPath(shield) {
-            val strokeWidth = size.width * 0.055f
-            val left = size.width * 0.2f
-            val right = size.width * 0.8f
-            listOf(0.38f, 0.57f, 0.76f).forEach { row ->
-                drawLine(
-                    color = brickColor,
-                    start = androidx.compose.ui.geometry.Offset(left * size.width, row * size.height),
-                    end = androidx.compose.ui.geometry.Offset(right * size.width, row * size.height),
-                    strokeWidth = strokeWidth
-                )
-            }
-            listOf(0.4f, 0.6f).forEach { column ->
-                drawLine(
-                    color = brickColor,
-                    start = androidx.compose.ui.geometry.Offset(column * size.width, size.height * 0.2f),
-                    end = androidx.compose.ui.geometry.Offset(column * size.width, size.height * 0.38f),
-                    strokeWidth = strokeWidth
-                )
-                drawLine(
-                    color = brickColor,
-                    start = androidx.compose.ui.geometry.Offset((1f - column) * size.width, size.height * 0.38f),
-                    end = androidx.compose.ui.geometry.Offset((1f - column) * size.width, size.height * 0.57f),
-                    strokeWidth = strokeWidth
-                )
-                drawLine(
-                    color = brickColor,
-                    start = androidx.compose.ui.geometry.Offset(column * size.width, size.height * 0.57f),
-                    end = androidx.compose.ui.geometry.Offset(column * size.width, size.height * 0.76f),
-                    strokeWidth = strokeWidth
-                )
-            }
-        }
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FirewallApp(
@@ -275,9 +220,8 @@ fun FirewallApp(
     val excludedPackages by viewModel.excludedPackages.collectAsState()
     val appSearch by viewModel.appSearch.collectAsState()
 
-    var selectedScreen by remember { mutableIntStateOf(0) }
-    val destinations = listOf("Inicio", "Actividad", "Reglas", "Ajustes")
-    val destinationGlyphs = listOf("⌂", "≡", "◇", "⚙")
+    var selectedTab by remember { mutableIntStateOf(0) }
+    val tabs = listOf("Actividad", "Reglas", "Apps")
 
     LaunchedEffect(Unit) {
         viewModel.toastMessage.collect { msg ->
@@ -287,52 +231,60 @@ fun FirewallApp(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        FirewallIcon()
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text("Firewall DNS", fontWeight = FontWeight.Bold)
-                            Text(
-                                text = "${stats.networkType} • DNS ${stats.upstreamDns}",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+            Column {
+                TopAppBar(
+                    title = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Shield,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
                             )
+                            Column {
+                                Text("Firewall DNS", fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = "Protección DNS • Candido y Elizabeth",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        actionIconContentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ),
+                    actions = {
+                        Switch(
+                            checked = stats.isRunning,
+                            onCheckedChange = onToggleVpn,
+                            modifier = Modifier.padding(end = 12.dp)
+                        )
                     }
-                },
-                actions = {
-                    Switch(
-                        checked = stats.isRunning,
-                        onCheckedChange = onToggleVpn,
-                        modifier = Modifier.padding(end = 12.dp)
-                    )
-                }
-            )
-        },
-        bottomBar = {
-            NavigationBar {
-                destinations.forEachIndexed { index, label ->
-                    NavigationBarItem(
-                        selected = selectedScreen == index,
-                        onClick = { selectedScreen = index },
-                        icon = { Text(destinationGlyphs[index], style = MaterialTheme.typography.titleMedium) },
-                        label = { Text(label) }
-                    )
+                )
+                TabRow(
+                    selectedTabIndex = selectedTab,
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.primary
+                ) {
+                    tabs.forEachIndexed { index, title ->
+                        Tab(
+                            selected = selectedTab == index,
+                            onClick = { selectedTab = index },
+                            text = { Text(title) }
+                        )
+                    }
                 }
             }
         }
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            when (selectedScreen) {
-                0 -> DashboardScreen(
-                    stats = stats,
-                    onToggleProtection = onToggleVpn,
-                    onOpenLogs = { selectedScreen = 1 },
-                    onOpenRules = { selectedScreen = 2 }
-                )
-                1 -> LogsScreen(
+            when (selectedTab) {
+                0 -> LogsScreen(
                     stats = stats,
                     logs = logs,
                     searchQuery = searchQuery,
@@ -344,7 +296,7 @@ fun FirewallApp(
                         viewModel.setCustomRule(entry.domain, block = !entry.isBlocked)
                     }
                 )
-                2 -> RulesScreen(
+                1 -> RulesScreen(
                     stats = stats,
                     customBlock = customBlock,
                     customAllow = customAllow,
@@ -358,7 +310,7 @@ fun FirewallApp(
                     onAddCustomRule = viewModel::setCustomRule,
                     onRemoveCustomRule = viewModel::removeCustomRule
                 )
-                3 -> AppsSettingsScreen(
+                2 -> AppsSettingsScreen(
                     stats = stats,
                     apps = apps,
                     excludedPackages = excludedPackages,
@@ -373,3 +325,71 @@ fun FirewallApp(
         }
     }
 }
+
+	
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+									
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
