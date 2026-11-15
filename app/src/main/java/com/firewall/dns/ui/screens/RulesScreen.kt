@@ -34,16 +34,15 @@ fun RulesScreen(
     var urlInput by remember { mutableStateOf("") }
 
     val presets = listOf(
-        "HaGeZi Pro" to "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/pro-onlydomains.txt",
-        "HaGeZi Multi" to "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/multi-onlydomains.txt",
-        "StevenBlack" to "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+        "Light" to "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/light.txt",
+        "Normal" to "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/multi.txt",
+        "Pro" to "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt"
     )
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Motor Inteligente Anti-Fallas
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Row(
@@ -51,9 +50,9 @@ fun RulesScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Motor Inteligente + Aprendizaje", fontWeight = FontWeight.Bold)
+                        Text("Motor Inteligente v2 + Aprendizaje", fontWeight = FontWeight.Bold)
                         Text(
-                            "Detecta trackers de Meta/TikTok/Ads sin romper videos ni login, y aprende de tus toques en Permitir/Bloquear.",
+                            "Puntuación multi-señal con escudo anti-fallas para Meta/TikTok/Ads y aprendizaje local por tus toques.",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -63,15 +62,14 @@ fun RulesScreen(
             }
         }
 
-        // Gestor de URLs raw externas
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Listas raw externas (${stats.loadedRulesCount} dominios)", fontWeight = FontWeight.Bold)
+                    Text("Listas Adblock ||dominio.com^ (${stats.loadedRulesCount} reglas)", fontWeight = FontWeight.Bold)
                     OutlinedTextField(
                         value = urlInput,
                         onValueChange = { urlInput = it },
-                        placeholder = { Text("https://raw.githubusercontent.com/...") },
+                        placeholder = { Text("https://raw.githubusercontent.com/.../adblock.txt") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -81,7 +79,7 @@ fun RulesScreen(
                             urlInput = ""
                         },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("Agregar URL raw") }
+                    ) { Text("Agregar URL Adblock externa") }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         presets.forEach { (name, url) ->
@@ -100,7 +98,7 @@ fun RulesScreen(
                         enabled = !isDownloading,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(if (isDownloading) "Descargando listas..." else "Descargar / Actualizar todas")
+                        Text(if (isDownloading) "Descargando listas..." else "Descargar / Actualizar listas")
                     }
                 }
             }
@@ -129,15 +127,14 @@ fun RulesScreen(
             }
         }
 
-        // Reglas manuales de dominio
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Agregar dominio manual", fontWeight = FontWeight.Bold)
+                    Text("Agregar regla manual (||dominio.com^ o dominio)", fontWeight = FontWeight.Bold)
                     OutlinedTextField(
                         value = domainInput,
                         onValueChange = { domainInput = it },
-                        placeholder = { Text("ej. tracking.ejemplo.com") },
+                        placeholder = { Text("ej. ||tracking.ejemplo.com^") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -185,7 +182,7 @@ private fun RuleRow(domain: String, isBlocked: Boolean, onDelete: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = if (isBlocked) "🚫 $domain" else "✅ $domain",
+                text = if (isBlocked) "🚫 ||$domain^" else "✅ @@||$domain^",
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
