@@ -17,9 +17,19 @@ class PreferencesDataSource(context: Context) {
         private const val KEY_BLOCKLIST_URLS = "blocklist_urls"
         private const val KEY_SMART_MODE = "smart_mode_enabled"
         private const val KEY_LEARNED_TOKENS = "learned_tokens"
+        private const val KEY_ADBLOCK_MIGRATED = "adblock_syntax_migrated_v1"
 
-        const val DEFAULT_URL =
-            "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/light-onlydomains.txt"
+        const val DEFAULT_ADBLOCK_URL =
+            "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/light.txt"
+    }
+
+    init {
+        if (!prefs.getBoolean(KEY_ADBLOCK_MIGRATED, false)) {
+            prefs.edit()
+                .putString(KEY_BLOCKLIST_URLS, DEFAULT_ADBLOCK_URL)
+                .putBoolean(KEY_ADBLOCK_MIGRATED, true)
+                .apply()
+        }
     }
 
     fun getCustomBlockSet(): Set<String> =
@@ -60,7 +70,7 @@ class PreferencesDataSource(context: Context) {
     fun getBlocklistUrls(): List<String> {
         val raw = prefs.getString(KEY_BLOCKLIST_URLS, null)
         return if (raw == null) {
-            listOf(DEFAULT_URL)
+            listOf(DEFAULT_ADBLOCK_URL)
         } else {
             raw.lines().map { it.trim() }.filter { it.startsWith("http") }
         }
