@@ -18,6 +18,7 @@ class PreferencesDataSource(context: Context) {
         private const val KEY_SMART_MODE = "smart_mode_enabled"
         private const val KEY_LEARNED_TOKENS = "learned_tokens"
         private const val KEY_ADBLOCK_MIGRATED = "adblock_syntax_migrated_v1"
+        private const val KEY_OBSERVATION_MODE = "observation_mode_enabled"
 
         const val DEFAULT_ADBLOCK_URL =
             "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/light.txt"
@@ -60,8 +61,7 @@ class PreferencesDataSource(context: Context) {
         prefs.edit().putString(KEY_UPSTREAM_DNS, dnsIp).apply()
     }
 
-    fun getShouldRun(): Boolean =
-        prefs.getBoolean(KEY_SHOULD_RUN, false)
+    fun getShouldRun(): Boolean = prefs.getBoolean(KEY_SHOULD_RUN, false)
 
     fun saveShouldRun(shouldRun: Boolean) {
         prefs.edit().putBoolean(KEY_SHOULD_RUN, shouldRun).apply()
@@ -69,22 +69,25 @@ class PreferencesDataSource(context: Context) {
 
     fun getBlocklistUrls(): List<String> {
         val raw = prefs.getString(KEY_BLOCKLIST_URLS, null)
-        return if (raw == null) {
-            listOf(DEFAULT_ADBLOCK_URL)
-        } else {
-            raw.lines().map { it.trim() }.filter { it.startsWith("http") }
-        }
+        return if (raw == null) listOf(DEFAULT_ADBLOCK_URL)
+        else raw.lines().map { it.trim() }.filter { it.startsWith("http") }
     }
 
     fun saveBlocklistUrls(urls: List<String>) {
         prefs.edit().putString(KEY_BLOCKLIST_URLS, urls.joinToString("\n")).apply()
     }
 
-    fun getSmartModeEnabled(): Boolean =
-        prefs.getBoolean(KEY_SMART_MODE, true)
+    fun getSmartModeEnabled(): Boolean = prefs.getBoolean(KEY_SMART_MODE, true)
 
     fun saveSmartModeEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_SMART_MODE, enabled).apply()
+    }
+
+    fun getObservationModeEnabled(): Boolean =
+        prefs.getBoolean(KEY_OBSERVATION_MODE, false)
+
+    fun saveObservationModeEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_OBSERVATION_MODE, enabled).apply()
     }
 
     fun getLearnedTokens(): MutableMap<String, Int> {
