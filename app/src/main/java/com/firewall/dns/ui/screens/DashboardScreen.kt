@@ -16,11 +16,11 @@ fun DashboardScreen(
     onOpenLogs: () -> Unit,
     onOpenRules: () -> Unit
 ) {
-    val statusText = if (stats.isRunning) "Tu conexión está protegida" else "La protección está pausada"
+    val statusText = if (stats.isRunning) "Filtrado DNS activo" else "Filtrado DNS pausado"
     val statusSupportingText = if (stats.isRunning) {
-        "El filtro DNS está activo en esta red."
+        "Se filtran las consultas DNS compatibles. El tráfico cifrado como DoH/DoT no se inspecciona."
     } else {
-        "Activa el firewall para filtrar consultas DNS."
+        "Activa el filtro para bloquear dominios según tus reglas DNS."
     }
 
     Column(
@@ -36,7 +36,7 @@ fun DashboardScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    if (stats.isRunning) "PROTECCIÓN ACTIVA" else "PROTECCIÓN INACTIVA",
+                    if (stats.isRunning) "FILTRO DNS ACTIVO" else "FILTRO DNS INACTIVO",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
@@ -55,23 +55,15 @@ fun DashboardScreen(
                     onClick = { onToggleProtection(!stats.isRunning) },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(if (stats.isRunning) "Pausar protección" else "Activar protección")
+                    Text(if (stats.isRunning) "Pausar filtrado" else "Activar filtrado")
                 }
             }
         }
 
         Text("Resumen", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            SummaryCard(
-                title = "Bloqueados",
-                value = stats.totalBlocked.toString(),
-                modifier = Modifier.weight(1f)
-            )
-            SummaryCard(
-                title = "Permitidos",
-                value = stats.totalAllowed.toString(),
-                modifier = Modifier.weight(1f)
-            )
+            SummaryCard("Bloqueados", stats.totalBlocked.toString(), Modifier.weight(1f))
+            SummaryCard("Permitidos", stats.totalAllowed.toString(), Modifier.weight(1f))
         }
 
         Card(modifier = Modifier.fillMaxWidth()) {

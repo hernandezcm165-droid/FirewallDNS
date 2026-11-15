@@ -32,14 +32,21 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 class DnsFirewallService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var tunReaderThread: Thread? = null
-    private val executor = Executors.newFixedThreadPool(12)
+    // A bounded queue applies backpressure instead of allowing packet bursts to grow memory without limit.
+    private val executor = ThreadPoolExecutor(
+        4, 4, 0L, TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(256),
+        ThreadPoolExecutor.CallerRunsPolicy()
+    )
     private val writeLock = Any()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -147,7 +154,7 @@ class DnsFirewallService : VpnService() {
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Firewall DNS activo")
-            .setContentText("Protegiendo IPv4/IPv6 y bloqueando fugas DNS")
+            .setContentText("Filtrando DNS clásico; DoH/DoT no se inspecciona")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentIntent(openAppIntent)
             .addAction(android.R.drawable.ic_media_pause, "Detener", stopIntent)
@@ -235,6 +242,9 @@ class DnsFirewallService : VpnService() {
                 isIpv6 = false
                 ipHeaderLen = (req[0].toInt() and 0x0F) * 4
                 if (ipHeaderLen < 20 || req.size < ipHeaderLen) return
+                // This simple DNS packet path does not reassemble IPv4 fragments.
+                val fragmentField = DnsPacketEngine.readU16(req, 6)
+                if ((fragmentField and 0x3FFF) != 0) return
                 protocol = req[9].toInt() and 0xFF
                 srcIp = req.copyOfRange(12, 16)
                 dstIp = req.copyOfRange(16, 20)
@@ -243,16 +253,23 @@ class DnsFirewallService : VpnService() {
                 if (req.size < 40) return
                 isIpv6 = true
                 ipHeaderLen = 40
+                // IPv6 extension headers are not parsed by this DNS-only packet handler.
                 protocol = req[6].toInt() and 0xFF
+                if (protocol != 17 && protocol != 6) return
                 srcIp = req.copyOfRange(8, 24)
                 dstIp = req.copyOfRange(24, 40)
             }
             else -> return
         }
 
-        if (protocol == 6 && req.size >= ipHeaderLen + 20) {
-            DnsPacketEngine.buildTcpRstResponse(req, isIpv6, ipHeaderLen, srcIp, dstIp)?.let {
-                writePacket(output, it)
+        if (protocol == 6) {
+            if (req.size < ipHeaderLen + 20) return
+            val tcpDestinationPort = DnsPacketEngine.readU16(req, ipHeaderLen + 2)
+            // Do not reset unrelated TCP sessions merely because they target a DNS provider IP.
+            if (tcpDestinationPort == 53) {
+                DnsPacketEngine.buildTcpRstResponse(req, isIpv6, ipHeaderLen, srcIp, dstIp)?.let {
+                    writePacket(output, it)
+                }
             }
             return
         }
@@ -260,9 +277,10 @@ class DnsFirewallService : VpnService() {
         if (protocol != 17 || req.size < ipHeaderLen + 8) return
         val srcPort = DnsPacketEngine.readU16(req, ipHeaderLen)
         val dstPort = DnsPacketEngine.readU16(req, ipHeaderLen + 2)
-        if (dstPort != 53) return
+        val udpLength = DnsPacketEngine.readU16(req, ipHeaderLen + 4)
+        if (dstPort != 53 || udpLength < 8 || ipHeaderLen + udpLength > req.size) return
 
-        val dnsPayload = req.copyOfRange(ipHeaderLen + 8, req.size)
+        val dnsPayload = req.copyOfRange(ipHeaderLen + 8, ipHeaderLen + udpLength)
         val query = DnsPacketEngine.parseDnsQuery(dnsPayload) ?: return
 
         val appName = resolveAppName(srcIp, srcPort, dstIp, dstPort)
