@@ -38,7 +38,6 @@ object RuleEvaluator {
         return cleaned
     }
 
-    // Supports common DNS-oriented Adblock and hosts-file formats.
     fun parseAdblockLine(raw: String): AdblockParseResult? {
         val trimmed = raw.trim()
         if (trimmed.isEmpty() || trimmed.startsWith("!") || trimmed.startsWith("#")) return null
@@ -62,7 +61,6 @@ object RuleEvaluator {
         return AdblockParseResult(domain = domain, isException = isException)
     }
 
-    // Accepts a domain, URL hostname, wildcard or Adblock-style domain rule.
     fun normalizeManualDomain(raw: String): String? = canonicalizeDomain(
         raw.trim()
             .removePrefix("@@")
@@ -79,14 +77,32 @@ object RuleEvaluator {
         hostExceptions: Set<String>,
         hostBlock: Set<String>
     ): Pair<Boolean, String> {
+        val decision = evaluateDecision(domain, customAllow, customBlock, hostExceptions, hostBlock)
+        return decision.blocked to decision.reason
+    }
+
+    fun evaluateDecision(
+        domain: String,
+        customAllow: Set<String>,
+        customBlock: Set<String>,
+        hostExceptions: Set<String>,
+        hostBlock: Set<String>
+    ): DecisionResult {
         val clean = domain.trim().trimEnd('.').lowercase()
 
-        // Explicit user allow rules and downloaded-list exceptions take precedence over blocks.
-        if (matchesDomainOrParent(clean, customAllow)) return false to "Lista blanca"
-        if (matchesDomainOrParent(clean, hostExceptions)) return false to "Excepción @@||"
-        if (matchesDomainOrParent(clean, customBlock)) return true to "Regla propia"
-        if (matchesDomainOrParent(clean, hostBlock)) return true to "Adblock ||^"
-        return false to "Permitido"
+        if (matchesDomainOrParent(clean, customAllow)) {
+            return DecisionResult(false, "Lista blanca", RuleSource.MANUAL_ALLOW)
+        }
+        if (matchesDomainOrParent(clean, hostExceptions)) {
+            return DecisionResult(false, "Excepción @@||", RuleSource.LIST_EXCEPTION)
+        }
+        if (matchesDomainOrParent(clean, customBlock)) {
+            return DecisionResult(true, "Regla propia", RuleSource.MANUAL_BLOCK)
+        }
+        if (matchesDomainOrParent(clean, hostBlock)) {
+            return DecisionResult(true, "Adblock ||^", RuleSource.LIST_BLOCK)
+        }
+        return DecisionResult(false, "Permitido", RuleSource.CACHE, cacheTtlMs = 30_000L)
     }
 
     private fun matchesDomainOrParent(domain: String, set: Set<String>): Boolean {
