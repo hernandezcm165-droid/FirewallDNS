@@ -1,360 +1,428 @@
-package com.firewall.dns
+package com.firewall.dns.service
 
-import android.Manifest
-import android.annotation.SuppressLint
-import android.app.Activity
-import android.content.ClipData
-import android.content.ClipboardManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
+import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
-import android.os.Bundle
-import android.os.PowerManager
-import android.provider.Settings
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
-import android.widget.Toast
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.ViewModelProvider
-import com.firewall.dns.service.DnsFirewallService
-import com.firewall.dns.ui.screens.AppsSettingsScreen
-import com.firewall.dns.ui.screens.LogsScreen
-import com.firewall.dns.ui.screens.RulesScreen
-import com.firewall.dns.ui.theme.FirewallTheme
-import com.firewall.dns.ui.viewmodel.FirewallViewModel
+import android.os.ParcelFileDescriptor
+import android.os.Process
+import android.system.OsConstants
+import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+import com.firewall.dns.MainActivity
+import com.firewall.dns.data.repository.FirewallRepository
+import com.firewall.dns.domain.engine.DnsPacketEngine
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.IOException
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
-class MainActivity : ComponentActivity() {
+class DnsFirewallService : VpnService() {
 
-    private lateinit var firewallViewModel: FirewallViewModel
+    private var vpnInterface: ParcelFileDescriptor? = null
+    private var tunReaderThread: Thread? = null
+    private val executor = ThreadPoolExecutor(
+        4, 4, 0L, TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(256),
+        ThreadPoolExecutor.CallerRunsPolicy()
+    )
+    private val writeLock = Any()
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    private val vpnPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) startFirewallService()
-    }
+    @Volatile
+    private var isRunning = false
 
-    private val notifPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { _ ->
-        requestAndStartVpn()
-    }
+    private data class CachedDns(val response: ByteArray, val expiresAt: Long)
+    private val dnsCache = ConcurrentHashMap<String, CachedDns>()
+    private val uidAppCache = ConcurrentHashMap<Int, String>()
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        val crashPrefs = getSharedPreferences("crash_debug", MODE_PRIVATE)
-        val savedCrash = crashPrefs.getString("last_crash", null)
+    private lateinit var connectivityManager: ConnectivityManager
 
-        val prevHandler = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            crashPrefs.edit().putString("last_crash", throwable.stackTraceToString()).commit()
-            prevHandler?.uncaughtException(thread, throwable)
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+            val type = when {
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Datos móviles"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+                else -> "Otra red"
+            }
+            FirewallRepository.setNetworkType(type)
         }
 
-        super.onCreate(savedInstanceState)
+        override fun onLost(network: Network) {
+            if (connectivityManager.activeNetwork == null) {
+                FirewallRepository.setNetworkType("Sin red")
+            }
+        }
+    }
 
-        if (!savedCrash.isNullOrBlank()) {
-            showCrashScreen(savedCrash, crashPrefs)
+    companion object {
+        const val ACTION_START = "ACTION_START_DNS_VPN"
+        const val ACTION_STOP = "ACTION_STOP_DNS_VPN"
+        private const val CHANNEL_ID = "dns_firewall_channel"
+        private const val NOTIFICATION_ID = 2001
+        private const val CACHE_TTL_MS = 60_000L
+
+        private val TRAPPED_IPV4_DNS = listOf("8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1")
+        private val TRAPPED_IPV6_DNS = listOf(
+            "2001:4860:4860::8888", "2001:4860:4860::8844",
+            "2606:4700:4700::1111", "2606:4700:4700::1001"
+        )
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        FirewallRepository.init(applicationContext)
+        connectivityManager = getSystemService(ConnectivityManager::class.java)
+
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            .build()
+        try {
+            connectivityManager.registerNetworkCallback(request, networkCallback)
+        } catch (_: Exception) {}
+
+        serviceScope.launch {
+            FirewallRepository.cacheInvalidateEvent.collect {
+                dnsCache.clear()
+                if (isRunning) updateForegroundNotification()
+            }
+        }
+        serviceScope.launch {
+            FirewallRepository.rebuildVpnEvent.collect {
+                if (isRunning) startVpn()
+            }
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_STOP -> {
+                FirewallRepository.setShouldRun(false)
+                stopVpn()
+                return START_NOT_STICKY
+            }
+            ACTION_START -> {
+                FirewallRepository.setShouldRun(true)
+                startForegroundNotification()
+                startVpn()
+            }
+            null -> {
+                startForegroundNotification()
+                startVpn()
+            }
+        }
+        return START_STICKY
+    }
+
+    private fun notificationText(): String = if (FirewallRepository.isObservationModeEnabled()) {
+        "Observación DNS activa; las reglas coincidentes siguen bloqueándose"
+    } else {
+        "Bloqueo DNS clásico activo; DoH/DoT no se inspecciona"
+    }
+
+    private fun buildNotification() = NotificationCompat.Builder(this, CHANNEL_ID)
+        .setContentTitle("Firewall DNS activo")
+        .setContentText(notificationText())
+        .setSmallIcon(android.R.drawable.ic_lock_lock)
+        .setContentIntent(
+            PendingIntent.getActivity(
+                this, 0, Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        )
+        .addAction(
+            android.R.drawable.ic_media_pause,
+            "Detener",
+            PendingIntent.getService(
+                this, 1,
+                Intent(this, DnsFirewallService::class.java).apply { action = ACTION_STOP },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        )
+        .setOngoing(true)
+        .build()
+
+    private fun startForegroundNotification() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID, "Firewall DNS", NotificationManager.IMPORTANCE_LOW
+            )
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+
+        val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        } else 0
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), fgsType)
+    }
+
+    private fun updateForegroundNotification() {
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification())
+    }
+
+    @Synchronized
+    private fun startVpn() {
+        closeInterface()
+
+        val upstream = FirewallRepository.getUpstreamDns()
+        val builder = Builder()
+            .setSession("FirewallDNS")
+            .addAddress("10.10.10.2", 32)
+            .addDnsServer("10.10.10.1")
+            .addRoute("10.10.10.1", 32)
+            .addAddress("fd00:10:10::2", 128)
+            .addDnsServer("fd00:10:10::1")
+            .addRoute("fd00:10:10::1", 128)
+
+        TRAPPED_IPV4_DNS.filter { it != upstream }.forEach { builder.addRoute(it, 32) }
+        TRAPPED_IPV6_DNS.forEach { builder.addRoute(it, 128) }
+
+        val excluded = FirewallRepository.excludedPackages.value + packageName
+        excluded.forEach { pkg ->
+            try {
+                builder.addDisallowedApplication(pkg)
+            } catch (_: PackageManager.NameNotFoundException) {}
+        }
+
+        val established = builder.establish()
+        if (established == null) {
+            stopVpn()
+            return
+        }
+        vpnInterface = established
+        isRunning = true
+        FirewallRepository.setRunning(true)
+
+        val fd = established.fileDescriptor
+        val input = FileInputStream(fd)
+        val output = FileOutputStream(fd)
+
+        tunReaderThread = Thread {
+            val buffer = ByteArray(4096)
+            try {
+                while (isRunning && !Thread.interrupted()) {
+                    val length = input.read(buffer)
+                    if (length < 0) break
+                    if (length > 0) {
+                        val copy = buffer.copyOf(length)
+                        executor.execute {
+                            try {
+                                handlePacket(copy, output)
+                            } catch (_: Throwable) {
+                                // Un paquete inválido no debe cerrar el servicio.
+                            }
+                        }
+                    }
+                }
+            } catch (_: IOException) {}
+        }.apply { start() }
+    }
+
+    private fun handlePacket(req: ByteArray, output: FileOutputStream) {
+        if (req.isEmpty()) return
+        val version = (req[0].toInt() ushr 4) and 0x0F
+
+        val isIpv6: Boolean
+        val ipHeaderLen: Int
+        val protocol: Int
+        val srcIp: ByteArray
+        val dstIp: ByteArray
+
+        when (version) {
+            4 -> {
+                if (req.size < 20) return
+                isIpv6 = false
+                ipHeaderLen = (req[0].toInt() and 0x0F) * 4
+                if (ipHeaderLen < 20 || req.size < ipHeaderLen) return
+                val fragmentField = DnsPacketEngine.readU16(req, 6)
+                if ((fragmentField and 0x3FFF) != 0) return
+                protocol = req[9].toInt() and 0xFF
+                srcIp = req.copyOfRange(12, 16)
+                dstIp = req.copyOfRange(16, 20)
+            }
+            6 -> {
+                if (req.size < 40) return
+                isIpv6 = true
+                ipHeaderLen = 40
+                protocol = req[6].toInt() and 0xFF
+                if (protocol != 17 && protocol != 6) return
+                srcIp = req.copyOfRange(8, 24)
+                dstIp = req.copyOfRange(24, 40)
+            }
+            else -> return
+        }
+
+        if (protocol == 6) {
+            if (req.size < ipHeaderLen + 20) return
+            val tcpDestinationPort = DnsPacketEngine.readU16(req, ipHeaderLen + 2)
+            if (tcpDestinationPort == 53) {
+                DnsPacketEngine.buildTcpRstResponse(req, isIpv6, ipHeaderLen, srcIp, dstIp)?.let {
+                    writePacket(output, it)
+                }
+            }
             return
         }
 
-        try {
-            firewallViewModel = ViewModelProvider(
-                this,
-                ViewModelProvider.AndroidViewModelFactory.getInstance(application)
-            )[FirewallViewModel::class.java]
+        if (protocol != 17 || req.size < ipHeaderLen + 8) return
+        val srcPort = DnsPacketEngine.readU16(req, ipHeaderLen)
+        val dstPort = DnsPacketEngine.readU16(req, ipHeaderLen + 2)
+        val udpLength = DnsPacketEngine.readU16(req, ipHeaderLen + 4)
+        if (dstPort != 53 || udpLength < 8 || ipHeaderLen + udpLength > req.size) return
 
-            if (firewallViewModel.shouldAutoStartVpn() && VpnService.prepare(this) == null) {
-                startFirewallService()
-            }
+        val dnsPayload = req.copyOfRange(ipHeaderLen + 8, ipHeaderLen + udpLength)
+        val query = DnsPacketEngine.parseDnsQuery(dnsPayload) ?: return
+        val appName = resolveAppName(srcIp, srcPort, dstIp, dstPort)
 
-            setContent {
-                FirewallTheme {
-                    Surface(color = MaterialTheme.colorScheme.background) {
-                        FirewallApp(
-                            viewModel = firewallViewModel,
-                            onToggleVpn = { enable ->
-                                if (enable) checkPermissionsAndStart() else stopFirewallService()
-                            },
-                            onOpenBatteryOpt = { requestIgnoreBatteryOptimization() },
-                            onOpenVpnSettings = { startActivity(Intent(Settings.ACTION_VPN_SETTINGS)) }
-                        )
-                    }
+        // Observation is a separate concern: always enforce matching DNS rules while logging the mode.
+        val (ruleWouldBlock, ruleReason) = FirewallRepository.evaluateDomain(query.domain)
+        val observationMode = FirewallRepository.isObservationModeEnabled()
+        val shouldBlock = ruleWouldBlock
+        val finalReason = when {
+            observationMode && shouldBlock -> "Observación + bloqueado: $ruleReason"
+            observationMode -> "Observación: permitido"
+            else -> ruleReason
+        }
+
+        val dnsResponse: ByteArray?
+        if (shouldBlock) {
+            dnsResponse = DnsPacketEngine.buildNxDomainResponse(dnsPayload, query.questionEndOffset)
+        } else {
+            val cacheKey = "${query.domain.lowercase()}:${query.qType}:${FirewallRepository.getUpstreamDns()}"
+            val now = System.currentTimeMillis()
+            val cached = dnsCache[cacheKey]
+            if (cached != null && cached.expiresAt > now) {
+                dnsResponse = cached.response.copyOf().apply {
+                    this[0] = dnsPayload[0]
+                    this[1] = dnsPayload[1]
                 }
-            }
-        } catch (t: Throwable) {
-            val trace = t.stackTraceToString()
-            crashPrefs.edit().putString("last_crash", trace).commit()
-            showCrashScreen(trace, crashPrefs)
-        }
-    }
-
-    private fun showCrashScreen(trace: String, crashPrefs: android.content.SharedPreferences) {
-        val density = resources.displayMetrics.density
-        val pad = (16 * density).toInt()
-        val topPad = (56 * density).toInt()
-
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(pad, topPad, pad, pad)
-            setBackgroundColor(android.graphics.Color.WHITE)
-        }
-        val title = TextView(this).apply {
-            text = "Error detectado al iniciar:"
-            textSize = 18f
-            setTextColor(android.graphics.Color.RED)
-        }
-        val btnRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, pad / 2, 0, pad / 2)
-        }
-        val copyBtn = Button(this).apply {
-            text = "Copiar error"
-            setOnClickListener {
-                val cb = getSystemService(ClipboardManager::class.java)
-                cb.setPrimaryClip(ClipData.newPlainText("Crash", trace))
-                Toast.makeText(this@MainActivity, "Error copiado", Toast.LENGTH_SHORT).show()
-            }
-        }
-        val retryBtn = Button(this).apply {
-            text = "Limpiar y reintentar"
-            setOnClickListener {
-                crashPrefs.edit().remove("last_crash").commit()
-                recreate()
-            }
-        }
-        btnRow.addView(copyBtn)
-        btnRow.addView(retryBtn)
-
-        val scroll = ScrollView(this)
-        val body = TextView(this).apply {
-            text = trace
-            textSize = 12f
-            setTextColor(android.graphics.Color.BLACK)
-        }
-        scroll.addView(body)
-        layout.addView(title)
-        layout.addView(btnRow)
-        layout.addView(scroll)
-        setContentView(layout)
-    }
-
-    private fun checkPermissionsAndStart() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            requestAndStartVpn()
-        }
-    }
-
-    private fun requestAndStartVpn() {
-        val intent = VpnService.prepare(this)
-        if (intent != null) vpnPermissionLauncher.launch(intent) else startFirewallService()
-    }
-
-    private fun startFirewallService() {
-        val intent = Intent(this, DnsFirewallService::class.java).apply {
-            action = DnsFirewallService.ACTION_START
-        }
-        ContextCompat.startForegroundService(this, intent)
-    }
-
-    private fun stopFirewallService() {
-        startService(Intent(this, DnsFirewallService::class.java).apply {
-            action = DnsFirewallService.ACTION_STOP
-        })
-    }
-
-    @SuppressLint("BatteryLife")
-    private fun requestIgnoreBatteryOptimization() {
-        val pm = getSystemService(PowerManager::class.java)
-        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
-            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                data = Uri.parse("package:$packageName")
-            }
-            startActivity(intent)
-        } else {
-            Toast.makeText(this, "La optimización ya está desactivada", Toast.LENGTH_SHORT).show()
-        }
-    }
-}
-
-@Composable
-private fun FirewallShieldIcon(modifier: Modifier = Modifier) {
-    val shieldColor = MaterialTheme.colorScheme.primary
-    val markColor = MaterialTheme.colorScheme.onPrimary
-
-    Canvas(modifier = modifier.size(24.dp)) {
-        val shield = Path().apply {
-            moveTo(size.width * 0.5f, size.height * 0.04f)
-            lineTo(size.width * 0.9f, size.height * 0.2f)
-            lineTo(size.width * 0.86f, size.height * 0.58f)
-            lineTo(size.width * 0.72f, size.height * 0.8f)
-            lineTo(size.width * 0.5f, size.height * 0.96f)
-            lineTo(size.width * 0.28f, size.height * 0.8f)
-            lineTo(size.width * 0.14f, size.height * 0.58f)
-            lineTo(size.width * 0.1f, size.height * 0.2f)
-            close()
-        }
-        drawPath(shield, shieldColor)
-        drawLine(
-            color = markColor,
-            start = androidx.compose.ui.geometry.Offset(size.width * 0.3f, size.height * 0.51f),
-            end = androidx.compose.ui.geometry.Offset(size.width * 0.45f, size.height * 0.66f),
-            strokeWidth = size.width * 0.08f,
-            cap = StrokeCap.Round
-        )
-        drawLine(
-            color = markColor,
-            start = androidx.compose.ui.geometry.Offset(size.width * 0.45f, size.height * 0.66f),
-            end = androidx.compose.ui.geometry.Offset(size.width * 0.72f, size.height * 0.37f),
-            strokeWidth = size.width * 0.08f,
-            cap = StrokeCap.Round
-        )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun FirewallApp(
-    viewModel: FirewallViewModel,
-    onToggleVpn: (Boolean) -> Unit,
-    onOpenBatteryOpt: () -> Unit,
-    onOpenVpnSettings: () -> Unit
-) {
-    val context = LocalContext.current
-    val stats by viewModel.stats.collectAsState()
-    val logs by viewModel.filteredLogs.collectAsState()
-    val searchQuery by viewModel.searchQuery.collectAsState()
-    val onlyBlocked by viewModel.onlyBlocked.collectAsState()
-    val customBlock by viewModel.customBlockList.collectAsState()
-    val customAllow by viewModel.customAllowList.collectAsState()
-    val blocklistUrls by viewModel.blocklistUrls.collectAsState()
-    val smartModeEnabled by viewModel.smartModeEnabled.collectAsState()
-    val isDownloading by viewModel.isDownloading.collectAsState()
-    val apps by viewModel.filteredApps.collectAsState()
-    val excludedPackages by viewModel.excludedPackages.collectAsState()
-    val appSearch by viewModel.appSearch.collectAsState()
-
-    var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Actividad", "Reglas", "Apps")
-
-    LaunchedEffect(Unit) {
-        viewModel.toastMessage.collect { msg ->
-            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    Scaffold(
-        topBar = {
-            Column {
-                TopAppBar(
-                    title = {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FirewallShieldIcon()
-                            Column {
-                                Text("Firewall DNS", fontWeight = FontWeight.Bold)
-                                Text(
-                                    text = "Protección DNS • Candido y Elizabeth",
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                        actionIconContentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    ),
-                    actions = {
-                        Switch(
-                            checked = stats.isRunning,
-                            onCheckedChange = onToggleVpn,
-                            modifier = Modifier.padding(end = 12.dp)
-                        )
-                    }
-                )
-                TabRow(
-                    selectedTabIndex = selectedTab,
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = MaterialTheme.colorScheme.primary
-                ) {
-                    tabs.forEachIndexed { index, title ->
-                        Tab(
-                            selected = selectedTab == index,
-                            onClick = { selectedTab = index },
-                            text = { Text(title) }
-                        )
-                    }
+            } else {
+                dnsResponse = forwardDnsQuery(dnsPayload)
+                if (dnsResponse != null) {
+                    if (dnsCache.size > 600) dnsCache.clear()
+                    dnsCache[cacheKey] = CachedDns(dnsResponse, now + CACHE_TTL_MS)
                 }
             }
         }
-    ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            when (selectedTab) {
-                0 -> LogsScreen(
-                    stats = stats,
-                    logs = logs,
-                    searchQuery = searchQuery,
-                    onlyBlocked = onlyBlocked,
-                    onSearchQueryChange = viewModel::onSearchQueryChange,
-                    onToggleOnlyBlocked = viewModel::onToggleOnlyBlocked,
-                    onClearLogs = viewModel::clearLogs,
-                    onToggleRule = { entry ->
-                        viewModel.setCustomRule(entry.domain, block = !entry.isBlocked)
-                    }
-                )
-                1 -> RulesScreen(
-                    stats = stats,
-                    customBlock = customBlock,
-                    customAllow = customAllow,
-                    blocklistUrls = blocklistUrls,
-                    smartModeEnabled = smartModeEnabled,
-                    isDownloading = isDownloading,
-                    onToggleSmartMode = viewModel::toggleSmartMode,
-                    onAddBlocklistUrl = viewModel::addBlocklistUrl,
-                    onRemoveBlocklistUrl = viewModel::removeBlocklistUrl,
-                    onDownloadBlocklist = viewModel::downloadBlocklist,
-                    onAddCustomRule = viewModel::setCustomRule,
-                    onRemoveCustomRule = viewModel::removeCustomRule
-                )
-                2 -> AppsSettingsScreen(
-                    stats = stats,
-                    apps = apps,
-                    excludedPackages = excludedPackages,
-                    appSearch = appSearch,
-                    onAppSearchChange = viewModel::onAppSearchChange,
-                    onSelectUpstreamDns = viewModel::setUpstreamDns,
-                    onToggleExcludedApp = viewModel::toggleExcludedApp,
-                    onOpenBatteryOpt = onOpenBatteryOpt,
-                    onOpenVpnSettings = onOpenVpnSettings
-                )
+
+        FirewallRepository.addLog(
+            domain = query.domain,
+            qType = DnsPacketEngine.queryTypeToString(query.qType),
+            isBlocked = shouldBlock,
+            reason = finalReason,
+            appName = appName
+        )
+
+        if (dnsResponse != null) {
+            val responsePacket = if (isIpv6) {
+                DnsPacketEngine.buildIpv6UdpResponse(srcIp, dstIp, srcPort, dstPort, dnsResponse)
+            } else {
+                DnsPacketEngine.buildIpv4UdpResponse(req, srcIp, dstIp, srcPort, dstPort, dnsResponse)
+            }
+            writePacket(output, responsePacket)
+        }
+    }
+
+    private fun writePacket(output: FileOutputStream, data: ByteArray) {
+        synchronized(writeLock) {
+            try {
+                output.write(data)
+            } catch (_: IOException) {}
+        }
+    }
+
+    private fun resolveAppName(srcIp: ByteArray, srcPort: Int, dstIp: ByteArray, dstPort: Int): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return "Sistema / Red"
+        val uid = try {
+            connectivityManager.getConnectionOwnerUid(
+                OsConstants.IPPROTO_UDP,
+                InetSocketAddress(InetAddress.getByAddress(srcIp), srcPort),
+                InetSocketAddress(InetAddress.getByAddress(dstIp), dstPort)
+            )
+        } catch (_: Exception) {
+            Process.INVALID_UID
+        }
+
+        if (uid == Process.INVALID_UID || uid <= 0) return "Sistema / DNS"
+        return uidAppCache.getOrPut(uid) {
+            try {
+                val pkgs = packageManager.getPackagesForUid(uid)
+                if (!pkgs.isNullOrEmpty()) {
+                    val info = packageManager.getApplicationInfo(pkgs[0], 0)
+                    packageManager.getApplicationLabel(info).toString()
+                } else "UID $uid"
+            } catch (_: Exception) {
+                "UID $uid"
             }
         }
+    }
+
+    private fun forwardDnsQuery(dnsPayload: ByteArray): ByteArray? {
+        var socket: DatagramSocket? = null
+        return try {
+            socket = DatagramSocket()
+            socket.soTimeout = 3500
+            if (!protect(socket)) return null
+            val addr = InetAddress.getByName(FirewallRepository.getUpstreamDns())
+            socket.send(DatagramPacket(dnsPayload, dnsPayload.size, addr, 53))
+            val buf = ByteArray(4096)
+            val resp = DatagramPacket(buf, buf.size)
+            socket.receive(resp)
+            if (resp.length >= 12) buf.copyOf(resp.length) else null
+        } catch (_: Exception) {
+            null
+        } finally {
+            socket?.close()
+        }
+    }
+
+    private fun closeInterface() {
+        isRunning = false
+        FirewallRepository.setRunning(false)
+        tunReaderThread?.interrupt()
+        tunReaderThread = null
+        try { vpnInterface?.close() } catch (_: IOException) {}
+        vpnInterface = null
+    }
+
+    private fun stopVpn() {
+        closeInterface()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    override fun onRevoke() {
+        FirewallRepository.setShouldRun(false)
+        stopVpn()
+        super.onRevoke()
+    }
+
+    override fun onDestroy() {
+        try { connectivityManager.unregisterNetworkCallback(networkCallback) } catch (_: Exception) {}
+        serviceScope.cancel()
+        closeInterface()
+        executor.shutdownNow()
+        super.onDestroy()
     }
 }
