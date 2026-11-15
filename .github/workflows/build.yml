@@ -23,13 +23,25 @@ jobs:
       - name: Compilar Debug APK
         run: gradle assembleDebug --no-daemon
 
-      - name: Inspeccionar firmas de Firestack
+      - name: Firmas 1 Bridge y Tunnel
         if: always()
         run: |
           AAR=$(find "$HOME/.gradle" "${GRADLE_USER_HOME:-$HOME/.gradle}" -name "*firestack*.aar" 2>/dev/null | head -n 1)
           unzip -p "$AAR" classes.jar > /tmp/fs.jar
-          CLASSES=$(jar tf /tmp/fs.jar | grep '\.class$' | grep -v '\$' | sed 's/\.class$//;s/\//./g' | grep -E 'Bridge|ServerListener|Flow|Mark|DNSOpts|DNSSummary|SocketSummary|Intra|Tunnel|Backend' | grep -vE 'Controller$|DNSListener$|ProxyListener$|ResolverListener$')
-          javap -cp /tmp/fs.jar $CLASSES
+          CLASSES=$(jar tf /tmp/fs.jar | grep '\.class$' | grep -v '\$' | sed 's/\.class$//;s/\//./g' | grep -E 'Bridge|ServerListener|FlowListener|Intra|Tunnel')
+          javap -cp /tmp/fs.jar $CLASSES | grep -vE 'public static final|incRef|equals\(|hashCode\(|toString\('
+
+      - name: Firmas 2 Mark y Flow
+        if: always()
+        run: |
+          CLASSES=$(jar tf /tmp/fs.jar | grep '\.class$' | grep -v '\$' | sed 's/\.class$//;s/\//./g' | grep -E 'Mark|FlowSummary|DNSOpts|DNSSummary')
+          javap -cp /tmp/fs.jar $CLASSES | grep -vE 'public static final|incRef|equals\(|hashCode\(|toString\('
+
+      - name: Firmas 3 Backend metodos
+        if: always()
+        run: |
+          CLASSES=$(jar tf /tmp/fs.jar | grep '\.class$' | grep -v '\$' | sed 's/\.class$//;s/\//./g' | grep -E 'Backend$')
+          javap -cp /tmp/fs.jar $CLASSES | grep -vE 'public static final|incRef|equals\(|hashCode\(|toString\('
 
       - name: Subir APK
         uses: actions/upload-artifact@v4
