@@ -61,6 +61,7 @@ object FirewallRepository {
     val rebuildVpnEvent: SharedFlow<Unit> = _rebuildVpnEvent.asSharedFlow()
 
     private val hostBlockSet = ConcurrentHashMap.newKeySet<String>()
+    private val hostExceptionSet = ConcurrentHashMap.newKeySet<String>()
     private val customBlockSet = ConcurrentHashMap.newKeySet<String>()
     private val customAllowSet = ConcurrentHashMap.newKeySet<String>()
     private val learnedTokens = ConcurrentHashMap<String, Int>()
@@ -100,8 +101,11 @@ object FirewallRepository {
 
             _stats.update { it.copy(upstreamDns = prefsDataSource.getUpstreamDns()) }
 
+            val (loadedBlocked, loadedExceptions) = blocklistDataSource.loadFromDisk(defaultDomains)
             hostBlockSet.clear()
-            hostBlockSet.addAll(blocklistDataSource.loadFromDisk(defaultDomains))
+            hostBlockSet.addAll(loadedBlocked)
+            hostExceptionSet.clear()
+            hostExceptionSet.addAll(loadedExceptions)
             updateRulesCount()
 
             initialized = true
@@ -158,9 +162,11 @@ object FirewallRepository {
     suspend fun downloadBlocklist(): Result<String> {
         val urls = _blocklistUrls.value
         val result = blocklistDataSource.downloadMultipleAndSave(defaultDomains, urls)
-        return result.map { (newDomains, summary) ->
+        return result.map { (newBlocked, newExceptions, summary) ->
             hostBlockSet.clear()
-            hostBlockSet.addAll(newDomains)
+            hostBlockSet.addAll(newBlocked)
+            hostExceptionSet.clear()
+            hostExceptionSet.addAll(newExceptions)
             updateRulesCount()
             _cacheInvalidateEvent.tryEmit(Unit)
             summary
@@ -168,8 +174,14 @@ object FirewallRepository {
     }
 
     fun evaluateDomain(domain: String): Pair<Boolean, String> {
-        val baseEval = RuleEvaluator.evaluate(domain, customAllowSet, customBlockSet, hostBlockSet)
-        if (baseEval.first || baseEval.second == "Lista blanca") {
+        val baseEval = RuleEvaluator.evaluate(
+            domain = domain,
+            customAllow = customAllowSet,
+            customBlock = customBlockSet,
+            hostExceptions = hostExceptionSet,
+            hostBlock = hostBlockSet
+        )
+        if (baseEval.first || baseEval.second != "Permitido") {
             return baseEval
         }
         if (_smartModeEnabled.value) {
@@ -179,8 +191,7 @@ object FirewallRepository {
     }
 
     fun setCustomRule(domain: String, block: Boolean) {
-        val clean = domain.trim().lowercase()
-        if (!clean.contains('.')) return
+        val clean = RuleEvaluator.normalizeManualDomain(domain) ?: return
         if (block) {
             customAllowSet.remove(clean)
             customBlockSet.add(clean)
