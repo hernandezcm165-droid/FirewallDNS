@@ -21,13 +21,15 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -198,6 +200,41 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@Composable
+private fun FirewallShieldIcon(modifier: Modifier = Modifier) {
+    val shieldColor = MaterialTheme.colorScheme.primary
+    val markColor = MaterialTheme.colorScheme.onPrimary
+
+    Canvas(modifier = modifier.size(24.dp)) {
+        val shield = Path().apply {
+            moveTo(size.width * 0.5f, size.height * 0.04f)
+            lineTo(size.width * 0.9f, size.height * 0.2f)
+            lineTo(size.width * 0.86f, size.height * 0.58f)
+            lineTo(size.width * 0.72f, size.height * 0.8f)
+            lineTo(size.width * 0.5f, size.height * 0.96f)
+            lineTo(size.width * 0.28f, size.height * 0.8f)
+            lineTo(size.width * 0.14f, size.height * 0.58f)
+            lineTo(size.width * 0.1f, size.height * 0.2f)
+            close()
+        }
+        drawPath(shield, shieldColor)
+        drawLine(
+            color = markColor,
+            start = androidx.compose.ui.geometry.Offset(size.width * 0.3f, size.height * 0.51f),
+            end = androidx.compose.ui.geometry.Offset(size.width * 0.45f, size.height * 0.66f),
+            strokeWidth = size.width * 0.08f,
+            cap = StrokeCap.Round
+        )
+        drawLine(
+            color = markColor,
+            start = androidx.compose.ui.geometry.Offset(size.width * 0.45f, size.height * 0.66f),
+            end = androidx.compose.ui.geometry.Offset(size.width * 0.72f, size.height * 0.37f),
+            strokeWidth = size.width * 0.08f,
+            cap = StrokeCap.Round
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FirewallApp(
@@ -238,11 +275,7 @@ fun FirewallApp(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Shield,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary
-                            )
+                            FirewallShieldIcon()
                             Column {
                                 Text("Firewall DNS", fontWeight = FontWeight.Bold)
                                 Text(
@@ -325,71 +358,3 @@ fun FirewallApp(
         }
     }
 }
-
-	
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-									
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
- 
-
