@@ -70,9 +70,7 @@ class DnsFirewallService : VpnService() {
         }
 
         override fun onLost(network: Network) {
-            if (connectivityManager.activeNetwork == null) {
-                FirewallRepository.setNetworkType("Sin red")
-            }
+            if (connectivityManager.activeNetwork == null) FirewallRepository.setNetworkType("Sin red")
         }
     }
 
@@ -82,7 +80,6 @@ class DnsFirewallService : VpnService() {
         private const val CHANNEL_ID = "dns_firewall_channel"
         private const val NOTIFICATION_ID = 2001
         private const val CACHE_TTL_MS = 60_000L
-
         private val TRAPPED_IPV4_DNS = listOf("8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1")
         private val TRAPPED_IPV6_DNS = listOf(
             "2001:4860:4860::8888", "2001:4860:4860::8844",
@@ -104,7 +101,10 @@ class DnsFirewallService : VpnService() {
         } catch (_: Exception) {}
 
         serviceScope.launch {
-            FirewallRepository.cacheInvalidateEvent.collect { dnsCache.clear() }
+            FirewallRepository.cacheInvalidateEvent.collect {
+                dnsCache.clear()
+                if (isRunning) updateForegroundNotification()
+            }
         }
         serviceScope.launch {
             FirewallRepository.rebuildVpnEvent.collect {
@@ -133,49 +133,52 @@ class DnsFirewallService : VpnService() {
         return START_STICKY
     }
 
+    private fun notificationText(): String = if (FirewallRepository.isObservationModeEnabled()) {
+        "Monitoreo + bloqueo por reglas DNS; DoH/DoT no se inspecciona"
+    } else {
+        "Bloqueo DNS activo; DoH/DoT no se inspecciona"
+    }
+
+    private fun buildNotification() = NotificationCompat.Builder(this, CHANNEL_ID)
+        .setContentTitle("Firewall DNS activo")
+        .setContentText(notificationText())
+        .setSmallIcon(android.R.drawable.ic_lock_lock)
+        .setContentIntent(
+            PendingIntent.getActivity(
+                this, 0, Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        )
+        .addAction(
+            android.R.drawable.ic_media_pause,
+            "Detener",
+            PendingIntent.getService(
+                this, 1,
+                Intent(this, DnsFirewallService::class.java).apply { action = ACTION_STOP },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        )
+        .setOngoing(true)
+        .build()
+
     private fun startForegroundNotification() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID, "Firewall DNS", NotificationManager.IMPORTANCE_LOW
-            )
+            val channel = NotificationChannel(CHANNEL_ID, "Firewall DNS", NotificationManager.IMPORTANCE_LOW)
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
-
-        val openAppIntent = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val stopIntent = PendingIntent.getService(
-            this, 1,
-            Intent(this, DnsFirewallService::class.java).apply { action = ACTION_STOP },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val modeText = if (FirewallRepository.isObservationModeEnabled()) {
-            "Observación: DNS permitido; reglas se registran sin bloquear"
-        } else {
-            "Bloqueo DNS clásico activo; DoH/DoT no se inspecciona"
-        }
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Firewall DNS activo")
-            .setContentText(modeText)
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setContentIntent(openAppIntent)
-            .addAction(android.R.drawable.ic_media_pause, "Detener", stopIntent)
-            .setOngoing(true)
-            .build()
-
         val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         } else 0
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), fgsType)
+    }
 
-        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, fgsType)
+    private fun updateForegroundNotification() {
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification())
     }
 
     @Synchronized
     private fun startVpn() {
         closeInterface()
-
         val upstream = FirewallRepository.getUpstreamDns()
         val builder = Builder()
             .setSession("FirewallDNS")
@@ -185,12 +188,10 @@ class DnsFirewallService : VpnService() {
             .addAddress("fd00:10:10::2", 128)
             .addDnsServer("fd00:10:10::1")
             .addRoute("fd00:10:10::1", 128)
-
         TRAPPED_IPV4_DNS.filter { it != upstream }.forEach { builder.addRoute(it, 32) }
         TRAPPED_IPV6_DNS.forEach { builder.addRoute(it, 128) }
 
-        val excluded = FirewallRepository.excludedPackages.value + packageName
-        excluded.forEach { pkg ->
+        (FirewallRepository.excludedPackages.value + packageName).forEach { pkg ->
             try {
                 builder.addDisallowedApplication(pkg)
             } catch (_: PackageManager.NameNotFoundException) {}
@@ -204,10 +205,8 @@ class DnsFirewallService : VpnService() {
         vpnInterface = established
         isRunning = true
         FirewallRepository.setRunning(true)
-
-        val fd = established.fileDescriptor
-        val input = FileInputStream(fd)
-        val output = FileOutputStream(fd)
+        val input = FileInputStream(established.fileDescriptor)
+        val output = FileOutputStream(established.fileDescriptor)
 
         tunReaderThread = Thread {
             val buffer = ByteArray(4096)
@@ -233,7 +232,6 @@ class DnsFirewallService : VpnService() {
     private fun handlePacket(req: ByteArray, output: FileOutputStream) {
         if (req.isEmpty()) return
         val version = (req[0].toInt() ushr 4) and 0x0F
-
         val isIpv6: Boolean
         val ipHeaderLen: Int
         val protocol: Int
@@ -284,14 +282,14 @@ class DnsFirewallService : VpnService() {
         val dnsPayload = req.copyOfRange(ipHeaderLen + 8, ipHeaderLen + udpLength)
         val query = DnsPacketEngine.parseDnsQuery(dnsPayload) ?: return
         val appName = resolveAppName(srcIp, srcPort, dstIp, dstPort)
-
-        // Evaluate the rule regardless of mode so observation logs can show what would be blocked.
         val (ruleWouldBlock, ruleReason) = FirewallRepository.evaluateDomain(query.domain)
         val observationMode = FirewallRepository.isObservationModeEnabled()
-        val shouldBlock = ruleWouldBlock && !observationMode
+
+        // Monitoreo registra el contexto, pero las reglas de bloqueo se aplican en ambos modos.
+        val shouldBlock = ruleWouldBlock
         val finalReason = when {
-            observationMode && ruleWouldBlock -> "Observación: habría bloqueado ($ruleReason)"
-            observationMode -> "Observación: permitido"
+            observationMode && shouldBlock -> "Monitoreo + bloqueo: $ruleReason"
+            observationMode -> "Monitoreo: permitido"
             else -> ruleReason
         }
 
@@ -353,7 +351,6 @@ class DnsFirewallService : VpnService() {
         } catch (_: Exception) {
             Process.INVALID_UID
         }
-
         if (uid == Process.INVALID_UID || uid <= 0) return "Sistema / DNS"
         return uidAppCache.getOrPut(uid) {
             try {
@@ -362,9 +359,7 @@ class DnsFirewallService : VpnService() {
                     val info = packageManager.getApplicationInfo(pkgs[0], 0)
                     packageManager.getApplicationLabel(info).toString()
                 } else "UID $uid"
-            } catch (_: Exception) {
-                "UID $uid"
-            }
+            } catch (_: Exception) { "UID $uid" }
         }
     }
 
@@ -377,9 +372,9 @@ class DnsFirewallService : VpnService() {
             val addr = InetAddress.getByName(FirewallRepository.getUpstreamDns())
             socket.send(DatagramPacket(dnsPayload, dnsPayload.size, addr, 53))
             val buf = ByteArray(4096)
-            val resp = DatagramPacket(buf, buf.size)
-            socket.receive(resp)
-            if (resp.length >= 12) buf.copyOf(resp.length) else null
+            val response = DatagramPacket(buf, buf.size)
+            socket.receive(response)
+            if (response.length >= 12) buf.copyOf(response.length) else null
         } catch (_: Exception) {
             null
         } finally {

@@ -85,45 +85,32 @@ class FirewallViewModel(application: Application) : AndroidViewModel(application
     fun shouldAutoStartVpn(): Boolean =
         FirewallRepository.getShouldRun() && !FirewallRepository.stats.value.isRunning
 
-    fun onSearchQueryChange(query: String) {
-        _searchQuery.value = query
-    }
+    fun onSearchQueryChange(query: String) { _searchQuery.value = query }
 
-    fun onToggleOnlyBlocked() {
-        _onlyBlocked.value = !_onlyBlocked.value
-    }
+    fun onToggleOnlyBlocked() { _onlyBlocked.value = !_onlyBlocked.value }
 
-    fun onAppSearchChange(query: String) {
-        _appSearch.value = query
-    }
+    fun onAppSearchChange(query: String) { _appSearch.value = query }
 
     fun setCustomRule(domain: String, block: Boolean) {
         FirewallRepository.setCustomRule(domain, block)
     }
 
-    fun removeCustomRule(domain: String) {
-        FirewallRepository.removeCustomRule(domain)
-    }
+    fun removeCustomRule(domain: String) { FirewallRepository.removeCustomRule(domain) }
 
-    fun clearLogs() {
-        FirewallRepository.clearLogs()
-    }
+    fun clearLogs() { FirewallRepository.clearLogs() }
 
-    fun setUpstreamDns(dnsIp: String) {
-        FirewallRepository.setUpstreamDns(dnsIp)
-    }
+    fun setUpstreamDns(dnsIp: String) { FirewallRepository.setUpstreamDns(dnsIp) }
 
-    fun toggleExcludedApp(packageName: String) {
-        FirewallRepository.toggleExcludedApp(packageName)
-    }
+    fun toggleExcludedApp(packageName: String) { FirewallRepository.toggleExcludedApp(packageName) }
 
-    fun toggleSmartMode(enabled: Boolean) {
-        FirewallRepository.setSmartModeEnabled(enabled)
-    }
+    fun toggleSmartMode(enabled: Boolean) { FirewallRepository.setSmartModeEnabled(enabled) }
 
     fun setObservationModeEnabled(enabled: Boolean) {
         FirewallRepository.setObservationModeEnabled(enabled)
-        _toastMessage.tryEmit(if (enabled) "Observación: se registran reglas sin bloquear" else "Bloqueo DNS activado")
+        _toastMessage.tryEmit(
+            if (enabled) "Monitoreo activo: se registran consultas y las reglas de bloqueo se aplican"
+            else "Bloqueo DNS activo"
+        )
     }
 
     fun addBlocklistUrl(url: String) {
@@ -134,9 +121,7 @@ class FirewallViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun removeBlocklistUrl(url: String) {
-        FirewallRepository.removeBlocklistUrl(url)
-    }
+    fun removeBlocklistUrl(url: String) { FirewallRepository.removeBlocklistUrl(url) }
 
     fun downloadBlocklist() {
         if (_isDownloading.value) return
