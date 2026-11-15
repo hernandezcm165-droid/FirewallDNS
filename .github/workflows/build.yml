@@ -27,13 +27,8 @@ jobs:
         if: always()
         run: |
           AAR=$(find "$HOME/.gradle" "${GRADLE_USER_HOME:-$HOME/.gradle}" -name "*firestack*.aar" 2>/dev/null | head -n 1)
-          echo "AAR=$AAR"
-          if [ -z "$AAR" ]; then
-            echo "No se encontró el AAR en caché. Revisa el paso Compilar Debug APK."
-            exit 0
-          fi
           unzip -p "$AAR" classes.jar > /tmp/fs.jar
-          CLASSES=$(jar tf /tmp/fs.jar | grep '\.class$' | grep -v '\$' | sed 's/\.class$//;s/\//./g' | grep -E 'Bridge|Listener|Controller|Intra|Tunnel|Mark|Flow|Backend')
+          CLASSES=$(jar tf /tmp/fs.jar | grep '\.class$' | grep -v '\$' | sed 's/\.class$//;s/\//./g' | grep -E 'Bridge|ServerListener|Flow|Mark|DNSOpts|DNSSummary|SocketSummary|Intra|Tunnel|Backend' | grep -vE 'Controller$|DNSListener$|ProxyListener$|ResolverListener$')
           javap -cp /tmp/fs.jar $CLASSES
 
       - name: Subir APK
