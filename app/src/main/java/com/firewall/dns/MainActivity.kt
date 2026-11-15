@@ -39,6 +39,7 @@ import com.firewall.dns.service.DnsFirewallService
 import com.firewall.dns.ui.screens.AppsSettingsScreen
 import com.firewall.dns.ui.screens.LogsScreen
 import com.firewall.dns.ui.screens.RulesScreen
+import com.firewall.dns.ui.theme.FirewallTheme
 import com.firewall.dns.ui.viewmodel.FirewallViewModel
 
 class MainActivity : ComponentActivity() {
@@ -85,7 +86,7 @@ class MainActivity : ComponentActivity() {
             }
 
             setContent {
-                MaterialTheme {
+                FirewallTheme {
                     FirewallApp(
                         viewModel = firewallViewModel,
                         onToggleVpn = { enable ->
