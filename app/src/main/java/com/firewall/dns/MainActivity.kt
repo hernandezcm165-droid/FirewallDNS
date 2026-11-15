@@ -21,10 +21,14 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -192,6 +196,61 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@Composable
+private fun FirewallIcon() {
+    val shieldColor = MaterialTheme.colorScheme.primary
+    val brickColor = MaterialTheme.colorScheme.onPrimary
+
+    Canvas(modifier = Modifier.size(40.dp)) {
+        val shield = Path().apply {
+            moveTo(size.width * 0.5f, size.height * 0.04f)
+            lineTo(size.width * 0.9f, size.height * 0.2f)
+            lineTo(size.width * 0.87f, size.height * 0.58f)
+            lineTo(size.width * 0.72f, size.height * 0.82f)
+            lineTo(size.width * 0.5f, size.height * 0.97f)
+            lineTo(size.width * 0.28f, size.height * 0.82f)
+            lineTo(size.width * 0.13f, size.height * 0.58f)
+            lineTo(size.width * 0.1f, size.height * 0.2f)
+            close()
+        }
+
+        drawPath(path = shield, color = shieldColor)
+        clipPath(shield) {
+            val strokeWidth = size.width * 0.055f
+            val left = size.width * 0.2f
+            val right = size.width * 0.8f
+            listOf(0.38f, 0.57f, 0.76f).forEach { row ->
+                drawLine(
+                    color = brickColor,
+                    start = androidx.compose.ui.geometry.Offset(left * size.width, row * size.height),
+                    end = androidx.compose.ui.geometry.Offset(right * size.width, row * size.height),
+                    strokeWidth = strokeWidth
+                )
+            }
+            listOf(0.4f, 0.6f).forEach { column ->
+                drawLine(
+                    color = brickColor,
+                    start = androidx.compose.ui.geometry.Offset(column * size.width, size.height * 0.2f),
+                    end = androidx.compose.ui.geometry.Offset(column * size.width, size.height * 0.38f),
+                    strokeWidth = strokeWidth
+                )
+                drawLine(
+                    color = brickColor,
+                    start = androidx.compose.ui.geometry.Offset((1f - column) * size.width, size.height * 0.38f),
+                    end = androidx.compose.ui.geometry.Offset((1f - column) * size.width, size.height * 0.57f),
+                    strokeWidth = strokeWidth
+                )
+                drawLine(
+                    color = brickColor,
+                    start = androidx.compose.ui.geometry.Offset(column * size.width, size.height * 0.57f),
+                    end = androidx.compose.ui.geometry.Offset(column * size.width, size.height * 0.76f),
+                    strokeWidth = strokeWidth
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FirewallApp(
@@ -228,13 +287,17 @@ fun FirewallApp(
             Column {
                 TopAppBar(
                     title = {
-                        Column {
-                            Text("Firewall DNS", fontWeight = FontWeight.Bold)
-                            Text(
-                                text = "Red: ${stats.networkType} • DNS: ${stats.upstreamDns}",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            FirewallIcon()
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text("Firewall DNS", fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = "Red: ${stats.networkType} • DNS: ${stats.upstreamDns}",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     },
                     actions = {
