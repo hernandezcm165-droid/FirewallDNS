@@ -37,6 +37,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
 import com.firewall.dns.service.DnsFirewallService
 import com.firewall.dns.ui.screens.AppsSettingsScreen
+import com.firewall.dns.ui.screens.DashboardScreen
 import com.firewall.dns.ui.screens.LogsScreen
 import com.firewall.dns.ui.screens.RulesScreen
 import com.firewall.dns.ui.theme.FirewallTheme
@@ -274,8 +275,9 @@ fun FirewallApp(
     val excludedPackages by viewModel.excludedPackages.collectAsState()
     val appSearch by viewModel.appSearch.collectAsState()
 
-    var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Registro", "Reglas", "Apps / Ajustes")
+    var selectedScreen by remember { mutableIntStateOf(0) }
+    val destinations = listOf("Inicio", "Actividad", "Reglas", "Ajustes")
+    val destinationGlyphs = listOf("⌂", "≡", "◇", "⚙")
 
     LaunchedEffect(Unit) {
         viewModel.toastMessage.collect { msg ->
@@ -285,45 +287,52 @@ fun FirewallApp(
 
     Scaffold(
         topBar = {
-            Column {
-                TopAppBar(
-                    title = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            FirewallIcon()
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text("Firewall DNS", fontWeight = FontWeight.Bold)
-                                Text(
-                                    text = "Red: ${stats.networkType} • DNS: ${stats.upstreamDns}",
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+            TopAppBar(
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        FirewallIcon()
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text("Firewall DNS", fontWeight = FontWeight.Bold)
+                            Text(
+                                text = "${stats.networkType} • DNS ${stats.upstreamDns}",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                    },
-                    actions = {
-                        Switch(
-                            checked = stats.isRunning,
-                            onCheckedChange = onToggleVpn,
-                            modifier = Modifier.padding(end = 12.dp)
-                        )
                     }
-                )
-                TabRow(selectedTabIndex = selectedTab) {
-                    tabs.forEachIndexed { index, title ->
-                        Tab(
-                            selected = selectedTab == index,
-                            onClick = { selectedTab = index },
-                            text = { Text(title) }
-                        )
-                    }
+                },
+                actions = {
+                    Switch(
+                        checked = stats.isRunning,
+                        onCheckedChange = onToggleVpn,
+                        modifier = Modifier.padding(end = 12.dp)
+                    )
+                }
+            )
+        },
+        bottomBar = {
+            NavigationBar {
+                destinations.forEachIndexed { index, label ->
+                    NavigationBarItem(
+                        selected = selectedScreen == index,
+                        onClick = { selectedScreen = index },
+                        icon = { Text(destinationGlyphs[index], style = MaterialTheme.typography.titleMedium) },
+                        label = { Text(label) }
+                    )
                 }
             }
         }
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            when (selectedTab) {
-                0 -> LogsScreen(
+            when (selectedScreen) {
+                0 -> DashboardScreen(
+                    stats = stats,
+                    onToggleProtection = onToggleVpn,
+                    onOpenLogs = { selectedScreen = 1 },
+                    onOpenRules = { selectedScreen = 2 }
+                )
+                1 -> LogsScreen(
                     stats = stats,
                     logs = logs,
                     searchQuery = searchQuery,
@@ -335,7 +344,7 @@ fun FirewallApp(
                         viewModel.setCustomRule(entry.domain, block = !entry.isBlocked)
                     }
                 )
-                1 -> RulesScreen(
+                2 -> RulesScreen(
                     stats = stats,
                     customBlock = customBlock,
                     customAllow = customAllow,
@@ -349,7 +358,7 @@ fun FirewallApp(
                     onAddCustomRule = viewModel::setCustomRule,
                     onRemoveCustomRule = viewModel::removeCustomRule
                 )
-                2 -> AppsSettingsScreen(
+                3 -> AppsSettingsScreen(
                     stats = stats,
                     apps = apps,
                     excludedPackages = excludedPackages,

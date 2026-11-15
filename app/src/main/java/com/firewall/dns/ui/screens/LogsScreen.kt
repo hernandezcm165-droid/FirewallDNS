@@ -29,49 +29,11 @@ fun LogsScreen(
     onClearLogs: () -> Unit,
     onToggleRule: (DnsLogEntry) -> Unit
 ) {
-    val protectionStatus = if (stats.isRunning) "Protección activa" else "Protección pausada"
-    val protectionColor = if (stats.isRunning) Color(0xFF2E7D32) else Color(0xFF6D4C41)
-
     Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer
-            )
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = protectionStatus,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                    Text(
-                        text = "${stats.networkType} • DNS ${stats.upstreamDns}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
-                    )
-                }
-                Surface(
-                    shape = androidx.compose.foundation.shape.CircleShape,
-                    color = protectionColor,
-                    tonalElevation = 2.dp
-                ) {
-                    Box(Modifier.size(14.dp))
-                }
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatCard("Bloqueados", stats.totalBlocked.toString(), Color(0xFFD32F2F), Modifier.weight(1f))
-            StatCard("Permitidos", stats.totalAllowed.toString(), Color(0xFF388E3C), Modifier.weight(1f))
-            StatCard("Reglas", stats.loadedRulesCount.toString(), Color(0xFF1976D2), Modifier.weight(1f))
+            StatCard("Bloqueados", stats.totalBlocked.toString(), MaterialTheme.colorScheme.error, Modifier.weight(1f))
+            StatCard("Permitidos", stats.totalAllowed.toString(), MaterialTheme.colorScheme.primary, Modifier.weight(1f))
+            StatCard("Reglas", stats.loadedRulesCount.toString(), MaterialTheme.colorScheme.tertiary, Modifier.weight(1f))
         }
 
         Spacer(Modifier.height(8.dp))
@@ -81,7 +43,7 @@ fun LogsScreen(
                 value = searchQuery,
                 onValueChange = onSearchQueryChange,
                 placeholder = { Text("Buscar dominio...") },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Buscar") },
                 singleLine = true,
                 modifier = Modifier.weight(1f)
             )
@@ -92,7 +54,7 @@ fun LogsScreen(
                 label = { Text("Bloq.") }
             )
             IconButton(onClick = onClearLogs) {
-                Icon(Icons.Default.Delete, contentDescription = "Limpiar")
+                Icon(Icons.Default.Delete, contentDescription = "Limpiar registros")
             }
         }
 
@@ -101,21 +63,29 @@ fun LogsScreen(
         if (logs.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = if (stats.isRunning) "Esperando consultas DNS..." else "Enciende el interruptor arriba para empezar",
+                    text = if (stats.isRunning) "Esperando consultas DNS..." else "Activa el firewall para empezar",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(logs, key = { it.id }) { entry ->
-                    val bg = if (entry.isBlocked) Color(0xFFFFEBEE) else Color(0xFFE8F5E9)
-                    val fg = if (entry.isBlocked) Color(0xFFC62828) else Color(0xFF2E7D32)
+                    val bg = if (entry.isBlocked) {
+                        MaterialTheme.colorScheme.errorContainer
+                    } else {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    }
+                    val fg = if (entry.isBlocked) {
+                        MaterialTheme.colorScheme.onErrorContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSecondaryContainer
+                    }
                     Card(
                         colors = CardDefaults.cardColors(containerColor = bg),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
-                            modifier = Modifier.padding(10.dp),
+                            modifier = Modifier.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
@@ -128,7 +98,9 @@ fun LogsScreen(
                                 Text(
                                     text = "${entry.timestamp} • ${entry.queryType} • ${entry.reason} • ${entry.appName}",
                                     fontSize = 11.sp,
-                                    color = fg
+                                    color = fg,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                             TextButton(onClick = { onToggleRule(entry) }) {
