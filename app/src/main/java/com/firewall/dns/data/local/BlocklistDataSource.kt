@@ -13,31 +13,37 @@ class BlocklistDataSource(context: Context) {
     private val filesDir: File = context.applicationContext.filesDir
 
     companion object {
-        private const val HOSTS_FILE_NAME = "blocklist.txt"
+        private const val ADBLOCK_FILE_NAME = "adblock_rules.txt"
     }
 
-    fun loadFromDisk(defaultDomains: List<String>): Set<String> {
-        val result = HashSet<String>(defaultDomains)
-        val file = File(filesDir, HOSTS_FILE_NAME)
+    // Devuelve Pair(bloqueados, excepciones @@||)
+    fun loadFromDisk(defaultDomains: List<String>): Pair<Set<String>, Set<String>> {
+        val blocked = HashSet<String>(defaultDomains)
+        val exceptions = HashSet<String>()
+        val file = File(filesDir, ADBLOCK_FILE_NAME)
         if (file.exists()) {
             file.bufferedReader().useLines { lines ->
                 lines.forEach { line ->
-                    RuleEvaluator.parseHostLine(line)?.let { result.add(it) }
+                    RuleEvaluator.parseAdblockLine(line)?.let { parsed ->
+                        if (parsed.isException) exceptions.add(parsed.domain)
+                        else blocked.add(parsed.domain)
+                    }
                 }
             }
         }
-        return result
+        return blocked to exceptions
     }
 
     suspend fun downloadMultipleAndSave(
         defaultDomains: List<String>,
         urls: List<String>
-    ): Result<Pair<Set<String>, String>> = withContext(Dispatchers.IO) {
+    ): Result<Triple<Set<String>, Set<String>, String>> = withContext(Dispatchers.IO) {
         if (urls.isEmpty()) {
-            return@withContext Result.failure(Exception("Agrega al menos una URL raw"))
+            return@withContext Result.failure(Exception("Agrega al menos una URL en sintaxis Adblock"))
         }
 
-        val mergedSet = HashSet<String>(defaultDomains)
+        val blocked = HashSet<String>(defaultDomains)
+        val exceptions = HashSet<String>()
         var successCount = 0
         var lastError: Exception? = null
 
@@ -50,12 +56,15 @@ class BlocklistDataSource(context: Context) {
                     setRequestProperty("User-Agent", "FirewallDNS/1.0")
                 }
                 if (conn.responseCode != 200) {
-                    lastError = Exception("HTTP ${conn.responseCode} en $targetUrl")
+                    lastError = Exception("HTTP ${conn.responseCode}")
                     continue
                 }
                 conn.inputStream.bufferedReader().use { reader ->
                     reader.forEachLine { line ->
-                        RuleEvaluator.parseHostLine(line)?.let { mergedSet.add(it) }
+                        RuleEvaluator.parseAdblockLine(line)?.let { parsed ->
+                            if (parsed.isException) exceptions.add(parsed.domain)
+                            else blocked.add(parsed.domain)
+                        }
                     }
                 }
                 successCount++
@@ -70,15 +79,19 @@ class BlocklistDataSource(context: Context) {
             return@withContext Result.failure(lastError ?: Exception("No se pudo descargar ninguna lista"))
         }
 
-        val outFile = File(filesDir, HOSTS_FILE_NAME)
+        val outFile = File(filesDir, ADBLOCK_FILE_NAME)
         outFile.bufferedWriter().use { writer ->
-            mergedSet.forEach { domain ->
-                writer.write(domain)
+            blocked.forEach { domain ->
+                writer.write("||$domain^")
+                writer.newLine()
+            }
+            exceptions.forEach { domain ->
+                writer.write("@@||$domain^")
                 writer.newLine()
             }
         }
 
-        val summary = "Listas OK ($successCount/${urls.size}): ${mergedSet.size} dominios"
-        Result.success(mergedSet to summary)
+        val summary = "Adblock OK ($successCount/${urls.size}): ${blocked.size} reglas"
+        Result.success(Triple(blocked, exceptions, summary))
     }
 }
