@@ -41,7 +41,6 @@ class DnsFirewallService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var tunReaderThread: Thread? = null
-    // A bounded queue applies backpressure instead of allowing packet bursts to grow memory without limit.
     private val executor = ThreadPoolExecutor(
         4, 4, 0L, TimeUnit.MILLISECONDS,
         ArrayBlockingQueue(256),
@@ -152,9 +151,14 @@ class DnsFirewallService : VpnService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val modeText = if (FirewallRepository.isObservationModeEnabled()) {
+            "Observación: DNS permitido; reglas se registran sin bloquear"
+        } else {
+            "Bloqueo DNS clásico activo; DoH/DoT no se inspecciona"
+        }
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Firewall DNS activo")
-            .setContentText("Filtrando DNS clásico; DoH/DoT no se inspecciona")
+            .setContentText(modeText)
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentIntent(openAppIntent)
             .addAction(android.R.drawable.ic_media_pause, "Detener", stopIntent)
@@ -217,7 +221,7 @@ class DnsFirewallService : VpnService() {
                             try {
                                 handlePacket(copy, output)
                             } catch (_: Throwable) {
-                                // Evita que un paquete corrupto tumbe el hilo
+                                // Un paquete inválido no debe cerrar el servicio.
                             }
                         }
                     }
@@ -242,7 +246,6 @@ class DnsFirewallService : VpnService() {
                 isIpv6 = false
                 ipHeaderLen = (req[0].toInt() and 0x0F) * 4
                 if (ipHeaderLen < 20 || req.size < ipHeaderLen) return
-                // This simple DNS packet path does not reassemble IPv4 fragments.
                 val fragmentField = DnsPacketEngine.readU16(req, 6)
                 if ((fragmentField and 0x3FFF) != 0) return
                 protocol = req[9].toInt() and 0xFF
@@ -253,7 +256,6 @@ class DnsFirewallService : VpnService() {
                 if (req.size < 40) return
                 isIpv6 = true
                 ipHeaderLen = 40
-                // IPv6 extension headers are not parsed by this DNS-only packet handler.
                 protocol = req[6].toInt() and 0xFF
                 if (protocol != 17 && protocol != 6) return
                 srcIp = req.copyOfRange(8, 24)
@@ -265,7 +267,6 @@ class DnsFirewallService : VpnService() {
         if (protocol == 6) {
             if (req.size < ipHeaderLen + 20) return
             val tcpDestinationPort = DnsPacketEngine.readU16(req, ipHeaderLen + 2)
-            // Do not reset unrelated TCP sessions merely because they target a DNS provider IP.
             if (tcpDestinationPort == 53) {
                 DnsPacketEngine.buildTcpRstResponse(req, isIpv6, ipHeaderLen, srcIp, dstIp)?.let {
                     writePacket(output, it)
@@ -282,34 +283,36 @@ class DnsFirewallService : VpnService() {
 
         val dnsPayload = req.copyOfRange(ipHeaderLen + 8, ipHeaderLen + udpLength)
         val query = DnsPacketEngine.parseDnsQuery(dnsPayload) ?: return
-
         val appName = resolveAppName(srcIp, srcPort, dstIp, dstPort)
-        val (shouldBlock, reason) = FirewallRepository.evaluateDomain(query.domain)
+
+        // Evaluate the rule regardless of mode so observation logs can show what would be blocked.
+        val (ruleWouldBlock, ruleReason) = FirewallRepository.evaluateDomain(query.domain)
+        val observationMode = FirewallRepository.isObservationModeEnabled()
+        val shouldBlock = ruleWouldBlock && !observationMode
+        val finalReason = when {
+            observationMode && ruleWouldBlock -> "Observación: habría bloqueado ($ruleReason)"
+            observationMode -> "Observación: permitido"
+            else -> ruleReason
+        }
 
         val dnsResponse: ByteArray?
-        val finalReason: String
-
         if (shouldBlock) {
             dnsResponse = DnsPacketEngine.buildNxDomainResponse(dnsPayload, query.questionEndOffset)
-            finalReason = reason
         } else {
-            val cacheKey = "${query.domain.lowercase()}:${query.qType}"
-            val cached = dnsCache[cacheKey]
+            val cacheKey = "${query.domain.lowercase()}:${query.qType}:${FirewallRepository.getUpstreamDns()}"
             val now = System.currentTimeMillis()
-
+            val cached = dnsCache[cacheKey]
             if (cached != null && cached.expiresAt > now) {
                 dnsResponse = cached.response.copyOf().apply {
                     this[0] = dnsPayload[0]
                     this[1] = dnsPayload[1]
                 }
-                finalReason = "$reason (Caché)"
             } else {
                 dnsResponse = forwardDnsQuery(dnsPayload)
                 if (dnsResponse != null) {
                     if (dnsCache.size > 600) dnsCache.clear()
                     dnsCache[cacheKey] = CachedDns(dnsResponse, now + CACHE_TTL_MS)
                 }
-                finalReason = reason
             }
         }
 

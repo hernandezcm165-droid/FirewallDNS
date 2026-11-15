@@ -54,6 +54,9 @@ object FirewallRepository {
     private val _smartModeEnabled = MutableStateFlow(true)
     val smartModeEnabled: StateFlow<Boolean> = _smartModeEnabled.asStateFlow()
 
+    private val _observationModeEnabled = MutableStateFlow(true)
+    val observationModeEnabled: StateFlow<Boolean> = _observationModeEnabled.asStateFlow()
+
     private val _cacheInvalidateEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val cacheInvalidateEvent: SharedFlow<Unit> = _cacheInvalidateEvent.asSharedFlow()
 
@@ -96,6 +99,7 @@ object FirewallRepository {
             _excludedPackages.value = prefsDataSource.getExcludedPackages()
             _blocklistUrls.value = prefsDataSource.getBlocklistUrls()
             _smartModeEnabled.value = prefsDataSource.getSmartModeEnabled()
+            _observationModeEnabled.value = prefsDataSource.getObservationModeEnabled()
             learnedTokens.clear()
             learnedTokens.putAll(prefsDataSource.getLearnedTokens())
 
@@ -125,6 +129,14 @@ object FirewallRepository {
         _stats.update { it.copy(upstreamDns = dnsIp) }
         _cacheInvalidateEvent.tryEmit(Unit)
         _rebuildVpnEvent.tryEmit(Unit)
+    }
+
+    fun isObservationModeEnabled(): Boolean = _observationModeEnabled.value
+
+    fun setObservationModeEnabled(enabled: Boolean) {
+        _observationModeEnabled.value = enabled
+        prefsDataSource.saveObservationModeEnabled(enabled)
+        _cacheInvalidateEvent.tryEmit(Unit)
     }
 
     fun setSmartModeEnabled(enabled: Boolean) {
@@ -181,9 +193,7 @@ object FirewallRepository {
             hostExceptions = hostExceptionSet,
             hostBlock = hostBlockSet
         )
-        if (baseEval.first || baseEval.second != "Permitido") {
-            return baseEval
-        }
+        if (baseEval.first || baseEval.second != "Permitido") return baseEval
         if (_smartModeEnabled.value) {
             SmartDomainAnalyzer.evaluate(domain, learnedTokens)?.let { return it }
         }

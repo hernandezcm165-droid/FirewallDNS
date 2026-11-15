@@ -26,6 +26,7 @@ class FirewallViewModel(application: Application) : AndroidViewModel(application
     val excludedPackages: StateFlow<Set<String>> = FirewallRepository.excludedPackages
     val blocklistUrls: StateFlow<List<String>> = FirewallRepository.blocklistUrls
     val smartModeEnabled: StateFlow<Boolean> = FirewallRepository.smartModeEnabled
+    val observationModeEnabled: StateFlow<Boolean> = FirewallRepository.observationModeEnabled
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
@@ -120,6 +121,11 @@ class FirewallViewModel(application: Application) : AndroidViewModel(application
         FirewallRepository.setSmartModeEnabled(enabled)
     }
 
+    fun setObservationModeEnabled(enabled: Boolean) {
+        FirewallRepository.setObservationModeEnabled(enabled)
+        _toastMessage.tryEmit(if (enabled) "Observación: se registran reglas sin bloquear" else "Bloqueo DNS activado")
+    }
+
     fun addBlocklistUrl(url: String) {
         if (FirewallRepository.addBlocklistUrl(url)) {
             _toastMessage.tryEmit("URL agregada. Pulsa Actualizar listas")
@@ -136,12 +142,12 @@ class FirewallViewModel(application: Application) : AndroidViewModel(application
         if (_isDownloading.value) return
         viewModelScope.launch {
             _isDownloading.value = true
-            val result = FirewallRepository.downloadBlocklist()
-            _isDownloading.value = false
-            result.onSuccess { summary ->
-                _toastMessage.tryEmit(summary)
-            }.onFailure { err ->
-                _toastMessage.tryEmit("Error: ${err.message}")
+            try {
+                val result = FirewallRepository.downloadBlocklist()
+                result.onSuccess { summary -> _toastMessage.tryEmit(summary) }
+                    .onFailure { err -> _toastMessage.tryEmit("Error: ${err.message}") }
+            } finally {
+                _isDownloading.value = false
             }
         }
     }

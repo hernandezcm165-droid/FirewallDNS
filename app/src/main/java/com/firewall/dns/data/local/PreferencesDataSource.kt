@@ -83,8 +83,9 @@ class PreferencesDataSource(context: Context) {
         prefs.edit().putBoolean(KEY_SMART_MODE, enabled).apply()
     }
 
+    // Observation is the safe default for first launch; a user's saved choice is preserved.
     fun getObservationModeEnabled(): Boolean =
-        prefs.getBoolean(KEY_OBSERVATION_MODE, false)
+        prefs.getBoolean(KEY_OBSERVATION_MODE, true)
 
     fun saveObservationModeEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_OBSERVATION_MODE, enabled).apply()
