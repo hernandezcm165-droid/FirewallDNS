@@ -23,6 +23,15 @@ jobs:
       - name: Compilar Debug APK
         run: gradle assembleDebug --no-daemon
 
+      - name: Inspeccionar firmas de Firestack
+        if: always()
+        run: |
+          AAR=$(find ~/.gradle/caches -name "*firestack*.aar" | head -n 1)
+          echo "AAR=$AAR"
+          unzip -p "$AAR" classes.jar > /tmp/fs.jar
+          CLASSES=$(jar tf /tmp/fs.jar | grep '\.class$' | grep -v '\$' | sed 's/\.class$//;s/\//./g' | grep -E 'Bridge|Listener|Controller|Intra|Tunnel|Mark|Flow|Backend')
+          javap -cp /tmp/fs.jar $CLASSES
+
       - name: Subir APK
         uses: actions/upload-artifact@v4
         with:
