@@ -29,7 +29,45 @@ fun LogsScreen(
     onClearLogs: () -> Unit,
     onToggleRule: (DnsLogEntry) -> Unit
 ) {
+    val protectionStatus = if (stats.isRunning) "Protección activa" else "Protección pausada"
+    val protectionColor = if (stats.isRunning) Color(0xFF2E7D32) else Color(0xFF6D4C41)
+
     Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            )
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = protectionStatus,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Text(
+                        text = "${stats.networkType} • DNS ${stats.upstreamDns}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                    )
+                }
+                Surface(
+                    shape = androidx.compose.foundation.shape.CircleShape,
+                    color = protectionColor,
+                    tonalElevation = 2.dp
+                ) {
+                    Box(Modifier.size(14.dp))
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatCard("Bloqueados", stats.totalBlocked.toString(), Color(0xFFD32F2F), Modifier.weight(1f))
             StatCard("Permitidos", stats.totalAllowed.toString(), Color(0xFF388E3C), Modifier.weight(1f))
