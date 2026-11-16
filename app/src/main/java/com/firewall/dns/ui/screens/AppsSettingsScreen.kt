@@ -4,11 +4,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,10 +40,10 @@ fun AppsSettingsScreen(
     onOpenVpnSettings: () -> Unit
 ) {
     val dnsOptions = listOf(
-        "9.9.9.9" to "Quad9" to "Seguridad y privacidad",
-        "1.1.1.1" to "Cloudflare" to "Rápido y privado",
-        "8.8.8.8" to "Google DNS" to "Resolución de Google",
-        "94.140.14.14" to "AdGuard DNS" to "Bloqueo DNS adicional"
+        Triple("9.9.9.9", "Quad9", "Seguridad y privacidad"),
+        Triple("1.1.1.1", "Cloudflare", "Rápido y privado"),
+        Triple("8.8.8.8", "Google DNS", "Resolución de Google"),
+        Triple("94.140.14.14", "AdGuard DNS", "Bloqueo DNS adicional")
     )
 
     LazyColumn(
